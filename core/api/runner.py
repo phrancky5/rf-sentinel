@@ -132,13 +132,30 @@ class JobRunner:
             _emit(job.id, "Stitching spectrum..." if num_chunks > 1 else "Processing...")
             result = stitch_spectra(segments)
 
+            _emit(job.id, "Detecting signals...")
+            from core.dsp import find_peaks as detect_peaks
+            peaks = detect_peaks(result.freqs_mhz, result.power_db)
+            if peaks:
+                _emit(job.id, f"  Found {len(peaks)} signal{'s' if len(peaks) != 1 else ''}")
+                for pk in peaks[:10]:
+                    _emit(job.id, f"    {pk.freq_mhz:.3f} MHz  {pk.power_db:+.1f} dB  (BW ~{pk.bandwidth_khz:.0f} kHz)")
+                if len(peaks) > 10:
+                    _emit(job.id, f"    ... and {len(peaks) - 10} more")
+            else:
+                _emit(job.id, "  No signals above noise floor")
+
             _emit(job.id, "Rendering plot...")
             plot_path = PLOTS_DIR / f"scan_{job.id}.png"
-            self._render_scan_plot(result, p, plot_path)
+            self._render_scan_plot(result, p, plot_path, peaks)
 
             job.result_path = plot_path
             job.status = JobStatus.COMPLETE
             job.duration_s = round(time.time() - t0, 2)
+            job.params["peaks"] = [
+                {"freq_mhz": pk.freq_mhz, "power_db": pk.power_db,
+                 "prominence_db": pk.prominence_db, "bandwidth_khz": pk.bandwidth_khz}
+                for pk in peaks
+            ]
             _emit(job.id, f"Scan complete ({job.duration_s}s)")
 
         except Exception as e:
@@ -192,7 +209,7 @@ class JobRunner:
             sample_rate=sample_rate,
         )
 
-    def _render_scan_plot(self, data, params: dict, path: Path) -> None:
+    def _render_scan_plot(self, data, params: dict, path: Path, peaks=None) -> None:
         fig, ax = plt.subplots(figsize=(14, 4))
         fig.patch.set_facecolor("#0a0e1a")
         ax.set_facecolor("#0f1525")
@@ -203,12 +220,29 @@ class JobRunner:
         ax.plot(freqs, power, linewidth=0.5, color="#00d4ff")
         ax.fill_between(freqs, np.min(power), power, alpha=0.12, color="#00d4ff")
 
+        # Annotate peaks
+        if peaks:
+            max_labels = 15
+            for i, pk in enumerate(peaks[:max_labels]):
+                ax.plot(pk.freq_mhz, pk.power_db, 'v', color='#ff6b35',
+                        markersize=6, markeredgecolor='#ff6b35', markeredgewidth=0.5)
+                ax.annotate(
+                    f"{pk.freq_mhz:.3f}",
+                    xy=(pk.freq_mhz, pk.power_db),
+                    xytext=(0, 8), textcoords='offset points',
+                    fontsize=6, color='#ff6b35', ha='center',
+                    fontweight='bold',
+                )
+
         ax.set_xlabel("Frequency [MHz]", color="#a0a0a0")
         ax.set_ylabel("Power [dB]", color="#a0a0a0")
-        ax.set_title(
-            f"PSD — {params['start_mhz']:.1f}–{params['stop_mhz']:.1f} MHz",
-            color="#e0e0e0", fontsize=13, fontweight="bold",
-        )
+
+        n_peaks = len(peaks) if peaks else 0
+        title = f"PSD — {params['start_mhz']:.1f}–{params['stop_mhz']:.1f} MHz"
+        if n_peaks:
+            title += f"  ({n_peaks} signal{'s' if n_peaks != 1 else ''})"
+        ax.set_title(title, color="#e0e0e0", fontsize=13, fontweight="bold")
+
         ax.tick_params(colors="#808080")
         ax.grid(True, alpha=0.15, color="#ffffff")
         ax.set_xlim(freqs[0], freqs[-1])

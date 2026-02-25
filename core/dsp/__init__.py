@@ -1,6 +1,8 @@
-"""DSP module — spectrum analysis, PSD, and waterfall generation."""
+"""DSP module — spectrum analysis, PSD, waterfall, and peak detection."""
 
 from __future__ import annotations
+
+from core.dsp.peaks import SignalPeak, find_peaks  # noqa: F401
 
 from dataclasses import dataclass
 from typing import Optional
