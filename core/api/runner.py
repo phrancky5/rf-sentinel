@@ -357,17 +357,13 @@ class JobRunner:
 
         vmin = np.percentile(power, 5)
         vmax = np.percentile(power, 99)
-        im = ax_wf.pcolormesh(
+        ax_wf.pcolormesh(
             freqs, times, power.T,
             shading="auto", cmap="inferno",
             norm=Normalize(vmin=vmin, vmax=vmax),
         )
         ax_wf.set_ylabel("Time [s]", color="#a0a0a0")
         ax_wf.set_xlabel("Frequency [MHz]", color="#a0a0a0")
-        cbar = fig.colorbar(im, ax=ax_wf, label="Power [dB]", pad=0.01)
-        cbar.ax.yaxis.set_tick_params(color="#808080")
-        cbar.ax.yaxis.label.set_color("#a0a0a0")
-        plt.setp(cbar.ax.yaxis.get_ticklabels(), color="#808080")
 
         plt.tight_layout()
         fig.savefig(path, dpi=150, facecolor=fig.get_facecolor())
