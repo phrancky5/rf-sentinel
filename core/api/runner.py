@@ -292,13 +292,30 @@ class JobRunner:
             _emit(job.id, "Stitching waterfall..." if num_chunks > 1 else "Processing...")
             result = stitch_waterfalls(segments)
 
+            _emit(job.id, "Detecting signals...")
+            from core.dsp import find_peaks as detect_peaks
+            peaks = detect_peaks(result.freqs_mhz, result.mean_psd_db)
+            if peaks:
+                _emit(job.id, f"  Found {len(peaks)} signal{'s' if len(peaks) != 1 else ''}")
+                for pk in peaks[:10]:
+                    _emit(job.id, f"    {pk.freq_mhz:.3f} MHz  {pk.power_db:+.1f} dB  (BW ~{pk.bandwidth_khz:.0f} kHz)")
+                if len(peaks) > 10:
+                    _emit(job.id, f"    ... and {len(peaks) - 10} more")
+            else:
+                _emit(job.id, "  No signals above noise floor")
+
             _emit(job.id, "Rendering waterfall plot...")
             plot_path = PLOTS_DIR / f"waterfall_{job.id}.png"
-            self._render_waterfall_plot(result, p, plot_path)
+            self._render_waterfall_plot(result, p, plot_path, peaks)
 
             job.result_path = plot_path
             job.status = JobStatus.COMPLETE
             job.duration_s = round(time.time() - t0, 2)
+            job.params["peaks"] = [
+                {"freq_mhz": pk.freq_mhz, "power_db": pk.power_db,
+                 "prominence_db": pk.prominence_db, "bandwidth_khz": pk.bandwidth_khz}
+                for pk in peaks
+            ]
             _emit(job.id, f"Waterfall complete ({job.duration_s}s)")
 
         except Exception as e:
@@ -379,7 +396,7 @@ class JobRunner:
             arr = arr.reshape(nf_trim // step_f, step_f, nt_trim // step_t, step_t).mean(axis=(1, 3))
         return arr
 
-    def _render_waterfall_plot(self, data, params: dict, path: Path) -> None:
+    def _render_waterfall_plot(self, data, params: dict, path: Path, peaks=None) -> None:
         from matplotlib.colors import Normalize
 
         freqs = data.freqs_mhz if hasattr(data, 'freqs_mhz') else data["freqs_mhz"]
@@ -413,11 +430,28 @@ class JobRunner:
 
         ax_psd.plot(freqs_psd, psd_ds, linewidth=0.8, color="#00d4ff")
         ax_psd.fill_between(freqs_psd, np.min(psd_ds), psd_ds, alpha=0.15, color="#00d4ff")
+
+        # Annotate peaks on PSD subplot
+        if peaks:
+            max_labels = 15
+            for pk in peaks[:max_labels]:
+                ax_psd.plot(pk.freq_mhz, pk.power_db, 'v', color='#ff6b35',
+                            markersize=5, markeredgewidth=0.5)
+                ax_psd.annotate(
+                    f"{pk.freq_mhz:.3f}",
+                    xy=(pk.freq_mhz, pk.power_db),
+                    xytext=(0, 7), textcoords='offset points',
+                    fontsize=5, color='#ff6b35', ha='center',
+                    fontweight='bold',
+                )
+
         ax_psd.set_ylabel("Power [dB]", color="#a0a0a0")
-        ax_psd.set_title(
-            f"Waterfall — {params['start_mhz']:.1f}–{params['stop_mhz']:.1f} MHz",
-            color="#e0e0e0", fontsize=13, fontweight="bold",
-        )
+
+        n_peaks = len(peaks) if peaks else 0
+        title = f"Waterfall — {params['start_mhz']:.1f}–{params['stop_mhz']:.1f} MHz"
+        if n_peaks:
+            title += f"  ({n_peaks} signal{'s' if n_peaks != 1 else ''})"
+        ax_psd.set_title(title, color="#e0e0e0", fontsize=13, fontweight="bold")
 
         vmin = np.percentile(power_ds, 5)
         vmax = np.percentile(power_ds, 99)
