@@ -1,11 +1,11 @@
-export type Mode = 'scan' | 'waterfall' | 'sweep';
+export type Mode = 'scan' | 'waterfall';
 
 interface Props {
   mode: Mode;
   onChange: (mode: Mode) => void;
 }
 
-const MODES: Mode[] = ['scan', 'waterfall', 'sweep'];
+const MODES: Mode[] = ['scan', 'waterfall'];
 
 export default function ModeSelector({ mode, onChange }: Props) {
   return (

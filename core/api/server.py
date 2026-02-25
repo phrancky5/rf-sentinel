@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from core.api.models import (
-    ScanRequest, WaterfallRequest, SweepRequest, JobInfo, JobStatus,
+    ScanRequest, WaterfallRequest, JobInfo, JobStatus,
 )
 from core.api.runner import JobRunner, set_log_callback, PLOTS_DIR
 
@@ -46,7 +46,6 @@ _ws_clients: list[WebSocket] = []
 
 
 async def _broadcast_log(job_id: str, message: str) -> None:
-    """Send log message to all connected WebSocket clients."""
     payload = json.dumps({"type": "log", "job_id": job_id, "message": message})
     dead = []
     for ws in _ws_clients:
@@ -58,12 +57,10 @@ async def _broadcast_log(job_id: str, message: str) -> None:
         _ws_clients.remove(ws)
 
 
-# Bridge sync runner logs → async WebSocket broadcast
 _loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 def _sync_log_callback(job_id: str, message: str) -> None:
-    """Called from background threads — schedules async broadcast."""
     if _loop and _loop.is_running():
         asyncio.run_coroutine_threadsafe(_broadcast_log(job_id, message), _loop)
 
@@ -88,7 +85,6 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     logger.info(f"WebSocket connected ({len(_ws_clients)} clients)")
     try:
         while True:
-            # Keep connection alive; client can send pings
             data = await ws.receive_text()
             if data == "ping":
                 await ws.send_text(json.dumps({"type": "pong"}))
@@ -110,19 +106,13 @@ async def get_status():
 
 @app.post("/api/scan")
 async def start_scan(req: ScanRequest):
-    job = runner.submit_scan(req.freq_mhz, req.sample_rate_msps, req.duration, req.gain)
+    job = runner.submit_scan(req.start_mhz, req.stop_mhz, req.duration, req.gain)
     return {"job_id": job.id, "status": job.status.value}
 
 
 @app.post("/api/waterfall")
 async def start_waterfall(req: WaterfallRequest):
-    job = runner.submit_waterfall(req.freq_mhz, req.sample_rate_msps, req.duration, req.gain)
-    return {"job_id": job.id, "status": job.status.value}
-
-
-@app.post("/api/sweep")
-async def start_sweep(req: SweepRequest):
-    job = runner.submit_sweep(req.gain, req.bands)
+    job = runner.submit_waterfall(req.start_mhz, req.stop_mhz, req.duration, req.gain)
     return {"job_id": job.id, "status": job.status.value}
 
 
@@ -161,14 +151,6 @@ async def get_job(job_id: str):
     ).model_dump()
 
 
-@app.get("/api/bands")
-async def get_bands():
-    """Return available frequency bands for sweep."""
-    from core.plotting import BANDS
-    return {k: {"name": v["name"], "freq_mhz": v["freq"] / 1e6, "rate_msps": v["rate"] / 1e6}
-            for k, v in BANDS.items()}
-
-
 # Serve plot images
 app.mount("/api/plots", StaticFiles(directory=str(PLOTS_DIR)), name="plots")
 
@@ -176,7 +158,6 @@ app.mount("/api/plots", StaticFiles(directory=str(PLOTS_DIR)), name="plots")
 # ── Entry point ─────────────────────────────────────────
 
 def run_server(host: str = "127.0.0.1", port: int = 8900, demo: bool = False) -> None:
-    """Start the RFSentinel UI server."""
     import uvicorn
 
     if demo:

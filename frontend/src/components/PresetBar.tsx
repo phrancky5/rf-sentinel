@@ -1,25 +1,26 @@
 interface Preset {
   label: string;
-  freq: number;
-  rate: number;
+  startMhz: number;
+  stopMhz: number;
 }
 
 interface Props {
-  activeFreq: number;
-  onSelect: (freq: number, rate: number) => void;
+  activeStart: number;
+  activeStop: number;
+  onSelect: (startMhz: number, stopMhz: number) => void;
 }
 
 const PRESETS: Preset[] = [
-  { label: 'FM Radio', freq: 98.0, rate: 2.048 },
-  { label: 'Airband', freq: 127.0, rate: 2.048 },
-  { label: 'PMR446', freq: 446.1, rate: 1.0 },
-  { label: '433 IoT', freq: 433.9, rate: 2.048 },
-  { label: '868 LoRa', freq: 868.0, rate: 2.048 },
-  { label: 'GSM 900', freq: 947.0, rate: 2.048 },
-  { label: 'ADS-B', freq: 1090.0, rate: 2.048 },
+  { label: 'FM Radio',  startMhz: 87.5,   stopMhz: 108.0 },
+  { label: 'Airband',   startMhz: 118.0,   stopMhz: 137.0 },
+  { label: 'PMR446',    startMhz: 446.0,   stopMhz: 446.2 },
+  { label: '433 IoT',   startMhz: 433.0,   stopMhz: 434.8 },
+  { label: '868 LoRa',  startMhz: 867.0,   stopMhz: 869.0 },
+  { label: 'GSM 900',   startMhz: 935.0,   stopMhz: 960.0 },
+  { label: 'ADS-B',     startMhz: 1089.0,  stopMhz: 1091.0 },
 ];
 
-export default function PresetBar({ activeFreq, onSelect }: Props) {
+export default function PresetBar({ activeStart, activeStop, onSelect }: Props) {
   return (
     <div>
       <label className="text-xs text-gray-500 uppercase tracking-wider mb-1.5 block">
@@ -29,9 +30,9 @@ export default function PresetBar({ activeFreq, onSelect }: Props) {
         {PRESETS.map(p => (
           <button
             key={p.label}
-            onClick={() => onSelect(p.freq, p.rate)}
+            onClick={() => onSelect(p.startMhz, p.stopMhz)}
             className={`px-2 py-1 text-xs rounded border transition-all
-              ${activeFreq === p.freq
+              ${activeStart === p.startMhz && activeStop === p.stopMhz
                 ? 'border-cyan-500/50 text-cyan-300 bg-cyan-500/10'
                 : 'border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300'
               }`}
