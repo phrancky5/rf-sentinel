@@ -11,13 +11,23 @@ export function useWebSocket(url: string) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<number>();
+  const disposed = useRef(false);
 
   const connect = useCallback(() => {
+    if (disposed.current) return;
+    
+    // Close any existing connection first
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+
     const ws = new WebSocket(url);
 
     ws.onopen = () => {
+      if (disposed.current) { ws.close(); return; }
       setConnected(true);
-      console.log('WebSocket connected');
     };
 
     ws.onmessage = (e) => {
@@ -36,7 +46,9 @@ export function useWebSocket(url: string) {
     ws.onclose = () => {
       setConnected(false);
       wsRef.current = null;
-      reconnectTimer.current = window.setTimeout(connect, 3000);
+      if (!disposed.current) {
+        reconnectTimer.current = window.setTimeout(connect, 3000);
+      }
     };
 
     ws.onerror = () => ws.close();
@@ -45,10 +57,17 @@ export function useWebSocket(url: string) {
   }, [url]);
 
   useEffect(() => {
+    disposed.current = false;
     connect();
     return () => {
+      disposed.current = true;
       clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      setConnected(false);
     };
   }, [connect]);
 
