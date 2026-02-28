@@ -8,11 +8,14 @@ interface Props {
   onJobStarted: () => void;
   liveActive: boolean;
   onLiveToggle: (active: boolean) => void;
+  centerMhz: number;
+  onCenterMhzChange: (freq: number) => void;
 }
 
-const MAX_LIVE_BW_MHZ = 2.0; // RTL-SDR single-chunk limit for live
-
-export default function ControlPanel({ onJobStarted, liveActive, onLiveToggle }: Props) {
+export default function ControlPanel({
+  onJobStarted, liveActive, onLiveToggle,
+  centerMhz, onCenterMhzChange,
+}: Props) {
   const [mode, setMode] = useState<Mode>('scan');
   const [startMhz, setStartMhz] = useState(97.0);
   const [stopMhz, setStopMhz] = useState(99.0);
@@ -21,17 +24,13 @@ export default function ControlPanel({ onJobStarted, liveActive, onLiveToggle }:
   const [loading, setLoading] = useState(false);
 
   const bandwidth = stopMhz - startMhz;
-  const invalid = stopMhz <= startMhz;
+  const invalid = mode !== 'live' && stopMhz <= startMhz;
   const isLive = mode === 'live';
-  const liveBwExceeded = isLive && bandwidth > MAX_LIVE_BW_MHZ;
-  const canRun = !invalid;
+  const canRun = isLive || !invalid;
 
   const handlePreset = (start: number, stop: number) => {
-    if (isLive && (stop - start) > MAX_LIVE_BW_MHZ) {
-      // Clamp to max live BW centered on preset
-      const center = (start + stop) / 2;
-      setStartMhz(+(center - MAX_LIVE_BW_MHZ / 2).toFixed(1));
-      setStopMhz(+(center + MAX_LIVE_BW_MHZ / 2).toFixed(1));
+    if (isLive) {
+      onCenterMhzChange(+((start + stop) / 2).toFixed(3));
     } else {
       setStartMhz(start);
       setStopMhz(stop);
@@ -49,8 +48,8 @@ export default function ControlPanel({ onJobStarted, liveActive, onLiveToggle }:
         setLoading(true);
         try {
           await startLive({
-            start_mhz: +startMhz.toFixed(1),
-            stop_mhz: +stopMhz.toFixed(1),
+            start_mhz: +(centerMhz - 1.0).toFixed(1),
+            stop_mhz: +(centerMhz + 1.0).toFixed(1),
             gain,
           });
           onLiveToggle(true);
@@ -85,7 +84,6 @@ export default function ControlPanel({ onJobStarted, liveActive, onLiveToggle }:
   };
 
   const handleModeChange = useCallback(async (newMode: Mode) => {
-    // Stop live if switching away
     if (liveActive && newMode !== 'live') {
       await stopLive();
       onLiveToggle(false);
@@ -100,50 +98,51 @@ export default function ControlPanel({ onJobStarted, liveActive, onLiveToggle }:
       <ModeSelector mode={mode} onChange={handleModeChange} />
 
       <PresetBar
-        activeStart={startMhz}
-        activeStop={stopMhz}
+        activeStart={isLive ? centerMhz - 1 : startMhz}
+        activeStop={isLive ? centerMhz + 1 : stopMhz}
         onSelect={handlePreset}
       />
 
-      <div className="space-y-3">
-        <ParamSlider label="Start Freq" value={startMhz} onChange={setStartMhz}
-          min={24} max={1766} step={0.1} unit="MHz" logScale nudgeSteps={[0.1, 1, 10]} />
-        <ParamSlider label="Stop Freq" value={stopMhz} onChange={setStopMhz}
-          min={24} max={1766} step={0.1} unit="MHz" logScale nudgeSteps={[0.1, 1, 10]} />
-      </div>
-
-      {/* Computed info */}
-      <div className="flex justify-between text-xs text-gray-500 px-0.5">
-        <span>BW: <span className="text-gray-400">{bandwidth.toFixed(1)} MHz</span></span>
-        {!isLive && numChunks > 1 && (
-          <span>Chunks: <span className="text-gray-400">{numChunks}</span></span>
-        )}
-        {!isLive && numChunks > 1 && (
-          <span>Est: <span className="text-gray-400">~{(() => {
-            const total = numChunks * duration;
-            if (total < 60) return `${total.toFixed(0)}s`;
-            const m = Math.floor(total / 60);
-            const s = Math.round(total % 60);
-            return `${m}:${s.toString().padStart(2, '0')}`;
-          })()} total</span></span>
-        )}
-      </div>
-
-      {invalid && (
-        <div className="text-xs text-red-400 bg-red-400/5 rounded px-2 py-1.5">
-          Stop frequency must be greater than start frequency.
+      {/* Frequency controls */}
+      {isLive ? (
+        <div className="space-y-3">
+          <ParamSlider label="Center Freq" value={centerMhz} onChange={onCenterMhzChange}
+            min={24} max={1766} step={0.001} unit="MHz" logScale nudgeSteps={[0.001, 0.0125, 0.1]} />
         </div>
-      )}
+      ) : (
+        <>
+          <div className="space-y-3">
+            <ParamSlider label="Start Freq" value={startMhz} onChange={setStartMhz}
+              min={24} max={1766} step={0.1} unit="MHz" logScale nudgeSteps={[0.1, 1, 10]} />
+            <ParamSlider label="Stop Freq" value={stopMhz} onChange={setStopMhz}
+              min={24} max={1766} step={0.1} unit="MHz" logScale nudgeSteps={[0.1, 1, 10]} />
+          </div>
 
-      {liveBwExceeded && (
-        <div className="text-xs text-yellow-400 bg-yellow-400/5 rounded px-2 py-1.5">
-          Live mode limited to {MAX_LIVE_BW_MHZ} MHz. Range will be clamped.
-        </div>
-      )}
+          <div className="flex justify-between text-xs text-gray-500 px-0.5">
+            <span>BW: <span className="text-gray-400">{bandwidth.toFixed(1)} MHz</span></span>
+            {numChunks > 1 && (
+              <span>Chunks: <span className="text-gray-400">{numChunks}</span></span>
+            )}
+            {numChunks > 1 && (
+              <span>Est: <span className="text-gray-400">~{(() => {
+                const total = numChunks * duration;
+                if (total < 60) return `${total.toFixed(0)}s`;
+                const m = Math.floor(total / 60);
+                const s = Math.round(total % 60);
+                return `${m}:${s.toString().padStart(2, '0')}`;
+              })()} total</span></span>
+            )}
+          </div>
 
-      {!isLive && (
-        <ParamSlider label={numChunks > 1 ? 'Duration / chunk' : 'Duration'} value={duration} onChange={setDuration}
-          min={0.5} max={30} step={0.5} unit="s" />
+          {invalid && (
+            <div className="text-xs text-red-400 bg-red-400/5 rounded px-2 py-1.5">
+              Stop frequency must be greater than start frequency.
+            </div>
+          )}
+
+          <ParamSlider label={numChunks > 1 ? 'Duration / chunk' : 'Duration'} value={duration} onChange={setDuration}
+            min={0.5} max={30} step={0.5} unit="s" />
+        </>
       )}
 
       <ParamSlider label="Gain" value={gain} onChange={setGain}

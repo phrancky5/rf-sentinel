@@ -17,6 +17,7 @@ export default function App() {
   const [selectedJob, setSelectedJob] = useState<JobInfo | null>(null);
   const [liveActive, setLiveActive] = useState(false);
   const [liveFrame, setLiveFrame] = useState<SpectrumFrame | null>(null);
+  const [centerMhz, setCenterMhz] = useState(98.0);
 
   useEffect(() => {
     const check = async () => {
@@ -94,6 +95,8 @@ export default function App() {
               onJobStarted={handleJobStarted}
               liveActive={liveActive}
               onLiveToggle={handleLiveToggle}
+              centerMhz={centerMhz}
+              onCenterMhzChange={setCenterMhz}
             />
           </div>
           <div className="flex-1 overflow-y-auto p-3">
