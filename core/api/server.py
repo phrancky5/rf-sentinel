@@ -1,21 +1,16 @@
-"""RFSentinel Web UI — FastAPI server with WebSocket log streaming."""
+"""RFSentinel Web UI — FastAPI app setup and entry point."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from pathlib import Path
-from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from core.api.models import (
-    ScanRequest, WaterfallRequest, LiveRequest, JobInfo, JobStatus,
-)
+from core.api import ws
+from core.api.routes import create_routes
 from core.api.runner import JobRunner, set_log_callback, PLOTS_DIR
 
 logger = logging.getLogger("rfsentinel.server")
@@ -37,151 +32,16 @@ app.add_middleware(
 
 runner = JobRunner()
 
-# ── WebSocket management ────────────────────────────────
-
-_ws_clients: list[WebSocket] = []
-
-
-async def _broadcast_log(job_id: str, message: str) -> None:
-    payload = json.dumps({"type": "log", "job_id": job_id, "message": message})
-    dead = []
-    for ws in _ws_clients:
-        try:
-            await ws.send_text(payload)
-        except Exception:
-            dead.append(ws)
-    for ws in dead:
-        _ws_clients.remove(ws)
-
-
-_loop: Optional[asyncio.AbstractEventLoop] = None
-
-
-async def _broadcast_raw(payload: str) -> None:
-    """Send a pre-serialized JSON payload to all WebSocket clients."""
-    dead = []
-    for ws in _ws_clients:
-        try:
-            await ws.send_text(payload)
-        except Exception:
-            dead.append(ws)
-    for ws in dead:
-        _ws_clients.remove(ws)
-
-
-def _sync_log_callback(job_id: str, message: str) -> None:
-    if _loop and _loop.is_running():
-        if job_id == "__spectrum__":
-            asyncio.run_coroutine_threadsafe(_broadcast_raw(message), _loop)
-        else:
-            asyncio.run_coroutine_threadsafe(_broadcast_log(job_id, message), _loop)
-
-
-set_log_callback(_sync_log_callback)
+app.include_router(ws.router)
+app.include_router(create_routes(runner))
+app.mount("/api/plots", StaticFiles(directory=str(PLOTS_DIR)), name="plots")
 
 
 @app.on_event("startup")
-async def _capture_loop() -> None:
-    global _loop
-    _loop = asyncio.get_running_loop()
+async def _startup() -> None:
+    ws.set_loop(asyncio.get_running_loop())
+    set_log_callback(ws.log_callback)
     logger.info("RFSentinel server started")
-
-
-# ── WebSocket endpoint ──────────────────────────────────
-
-@app.websocket("/api/ws")
-async def websocket_endpoint(ws: WebSocket) -> None:
-    await ws.accept()
-    _ws_clients.append(ws)
-    logger.info(f"WebSocket connected ({len(_ws_clients)} clients)")
-    try:
-        while True:
-            data = await ws.receive_text()
-            if data == "ping":
-                await ws.send_text(json.dumps({"type": "pong"}))
-    except WebSocketDisconnect:
-        _ws_clients.remove(ws)
-        logger.info(f"WebSocket disconnected ({len(_ws_clients)} clients)")
-
-
-# ── REST endpoints ──────────────────────────────────────
-
-@app.get("/api/status")
-async def get_status():
-    return {
-        "status": "online",
-        "connected_clients": len(_ws_clients),
-    }
-
-
-@app.post("/api/scan")
-async def start_scan(req: ScanRequest):
-    job = runner.submit_scan(req.start_mhz, req.stop_mhz, req.duration, req.gain)
-    return {"job_id": job.id, "status": job.status.value}
-
-
-@app.post("/api/waterfall")
-async def start_waterfall(req: WaterfallRequest):
-    job = runner.submit_waterfall(req.start_mhz, req.stop_mhz, req.duration, req.gain)
-    return {"job_id": job.id, "status": job.status.value}
-
-
-# ── Live endpoints ──────────────────────────────────────
-
-@app.post("/api/live/start")
-async def start_live(req: LiveRequest):
-    runner.start_live(req.start_mhz, req.stop_mhz, req.gain)
-    return {"status": "started", "start_mhz": req.start_mhz, "stop_mhz": req.stop_mhz}
-
-
-@app.post("/api/live/stop")
-async def stop_live():
-    runner.stop_live()
-    return {"status": "stopped"}
-
-
-@app.get("/api/live/status")
-async def live_status():
-    return {"active": runner.live_active}
-
-
-@app.get("/api/jobs")
-async def list_jobs():
-    jobs = runner.list_jobs()
-    return [
-        JobInfo(
-            id=j.id,
-            type=j.type,
-            status=j.status,
-            params=j.params,
-            result_url=f"/api/plots/{j.result_path.name}" if j.result_path else None,
-            error=j.error,
-            created_at=j.created_at.isoformat(),
-            duration_s=j.duration_s,
-        ).model_dump()
-        for j in jobs
-    ]
-
-
-@app.get("/api/jobs/{job_id}")
-async def get_job(job_id: str):
-    job = runner.get_job(job_id)
-    if not job:
-        return JSONResponse({"error": "Job not found"}, status_code=404)
-    return JobInfo(
-        id=job.id,
-        type=job.type,
-        status=job.status,
-        params=job.params,
-        result_url=f"/api/plots/{job.result_path.name}" if job.result_path else None,
-        error=job.error,
-        created_at=job.created_at.isoformat(),
-        duration_s=job.duration_s,
-    ).model_dump()
-
-
-# Serve plot images
-app.mount("/api/plots", StaticFiles(directory=str(PLOTS_DIR)), name="plots")
 
 
 # ── Entry point ─────────────────────────────────────────

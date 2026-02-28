@@ -8,17 +8,13 @@ interface Props {
   onJobStarted: () => void;
   liveActive: boolean;
   onLiveToggle: (active: boolean) => void;
-  centerMhz: number;
-  onCenterMhzChange: (freq: number) => void;
 }
 
-export default function ControlPanel({
-  onJobStarted, liveActive, onLiveToggle,
-  centerMhz, onCenterMhzChange,
-}: Props) {
+export default function ControlPanel({ onJobStarted, liveActive, onLiveToggle }: Props) {
   const [mode, setMode] = useState<Mode>('scan');
   const [startMhz, setStartMhz] = useState(97.0);
   const [stopMhz, setStopMhz] = useState(99.0);
+  const [centerMhz, setCenterMhz] = useState(98.0);
   const [duration, setDuration] = useState(2.0);
   const [gain, setGain] = useState(30.0);
   const [loading, setLoading] = useState(false);
@@ -30,7 +26,7 @@ export default function ControlPanel({
 
   const handlePreset = (start: number, stop: number) => {
     if (isLive) {
-      onCenterMhzChange(+((start + stop) / 2).toFixed(3));
+      setCenterMhz(+((start + stop) / 2).toFixed(3));
     } else {
       setStartMhz(start);
       setStopMhz(stop);
@@ -106,7 +102,7 @@ export default function ControlPanel({
       {/* Frequency controls */}
       {isLive ? (
         <div className="space-y-3">
-          <ParamSlider label="Center Freq" value={centerMhz} onChange={onCenterMhzChange}
+          <ParamSlider label="Center Freq" value={centerMhz} onChange={setCenterMhz}
             min={24} max={1766} step={0.1} unit="MHz" logScale nudgeSteps={[0.1, 1, 10]} />
         </div>
       ) : (
