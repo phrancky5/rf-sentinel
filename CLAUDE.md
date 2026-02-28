@@ -21,6 +21,11 @@ Coding preferences for this project.
 - Extract complex render logic (long canvas draw functions, multi-state returns) into named helper functions in the same file.
 - State should live as low as possible. If only one subtree uses a piece of state, own it there — don't prop-drill from a parent that doesn't need it.
 - Unify near-identical abstractions (e.g. two broadcast functions that do the same thing → one).
+- For long or conditional `className` strings, extract them as named constants at the top of the same file rather than using CSS files or extra libraries:
+  ```tsx
+  const card = 'px-3 py-2 rounded-lg border border-gray-700/50 bg-gray-800/30';
+  const cardSelected = 'border-cyan-500/40 bg-cyan-500/5';
+  ```
 
 ## Python
 
@@ -28,5 +33,6 @@ Coding preferences for this project.
 
 ## Git
 
+- Never commit or push without explicit user confirmation.
 - Commit messages: one short line, no bullet points, no details.
 - Stage only the files relevant to the change.
