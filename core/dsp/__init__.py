@@ -2,51 +2,21 @@
 
 from __future__ import annotations
 
-from core.dsp.peaks import SignalPeak, find_peaks  # noqa: F401
-
-from dataclasses import dataclass
-from typing import Optional
-
 import numpy as np
 from scipy.signal import welch, spectrogram
 
 from core.sdr import CaptureResult
+from core.dsp.types import SpectrumResult, WaterfallResult    # noqa: F401
+from core.dsp.peaks import SignalPeak, find_peaks             # noqa: F401
+from core.dsp.stitch import (                                 # noqa: F401
+    SAMPLE_RATE, USABLE_BW_FRAC, STEP_HZ,
+    plan_chunks, trim_spectrum, stitch_spectra,
+    trim_waterfall, stitch_waterfalls,
+)
 
 
-@dataclass
-class SpectrumResult:
-    """Power spectral density result."""
-
-    freqs_mhz: np.ndarray  # Frequency axis in MHz
-    power_db: np.ndarray  # Power in dB
-    center_freq_mhz: float
-    sample_rate: float
-
-
-@dataclass
-class WaterfallResult:
-    """Spectrogram / waterfall result."""
-
-    freqs_mhz: np.ndarray  # Frequency axis in MHz
-    times: np.ndarray  # Time axis in seconds
-    power_db: np.ndarray  # 2D power array [freq x time] in dB
-    mean_psd_db: np.ndarray  # Time-averaged PSD in dB
-    center_freq_mhz: float
-
-
-def compute_psd(
-    capture: CaptureResult,
-    nfft: int = 4096,
-) -> SpectrumResult:
-    """Compute power spectral density using Welch method.
-
-    Args:
-        capture: CaptureResult from SDR device.
-        nfft: FFT size (higher = better frequency resolution, slower).
-
-    Returns:
-        SpectrumResult with frequency and power arrays.
-    """
+def compute_psd(capture: CaptureResult, nfft: int = 4096) -> SpectrumResult:
+    """Compute power spectral density using Welch method."""
     fs = capture.config.sample_rate
     fc = capture.config.center_freq
 
@@ -54,153 +24,16 @@ def compute_psd(
     freqs = np.fft.fftshift(freqs)
     psd = np.fft.fftshift(psd)
 
-    freqs_mhz = (freqs + fc) / 1e6
-    power_db = 10 * np.log10(psd + 1e-12)
-
     return SpectrumResult(
-        freqs_mhz=freqs_mhz,
-        power_db=power_db,
+        freqs_mhz=(freqs + fc) / 1e6,
+        power_db=10 * np.log10(psd + 1e-12),
         center_freq_mhz=fc / 1e6,
         sample_rate=fs,
     )
 
 
-# ── Stitching ───────────────────────────────────────────
-
-SAMPLE_RATE = 2.048e6          # Fixed sample rate for all captures
-USABLE_BW_FRAC = 0.80          # Use 80% of bandwidth (trim noisy edges)
-STEP_HZ = SAMPLE_RATE * USABLE_BW_FRAC  # ~1.638 MHz per step
-
-
-def plan_chunks(start_hz: float, stop_hz: float) -> list[float]:
-    """Plan center frequencies for stitched capture.
-
-    Returns list of center frequencies (Hz) that cover start→stop
-    using STEP_HZ steps with edge trimming.
-    """
-    span = stop_hz - start_hz
-    if span <= SAMPLE_RATE:
-        return [(start_hz + stop_hz) / 2]
-
-    centers = []
-    fc = start_hz + SAMPLE_RATE / 2
-    while fc - SAMPLE_RATE / 2 < stop_hz:
-        centers.append(fc)
-        fc += STEP_HZ
-    return centers
-
-
-def trim_spectrum(result: SpectrumResult, trim_frac: float = 0.10) -> SpectrumResult:
-    """Trim the outer edges of a spectrum to remove rolloff artifacts."""
-    n = len(result.freqs_mhz)
-    cut = int(n * trim_frac)
-    if cut == 0:
-        return result
-    return SpectrumResult(
-        freqs_mhz=result.freqs_mhz[cut:-cut],
-        power_db=result.power_db[cut:-cut],
-        center_freq_mhz=result.center_freq_mhz,
-        sample_rate=result.sample_rate,
-    )
-
-
-def stitch_spectra(segments: list[SpectrumResult]) -> SpectrumResult:
-    """Stitch multiple trimmed PSD segments into one continuous spectrum.
-
-    Segments must be sorted by frequency (ascending center freq).
-    Overlapping regions are averaged.
-    """
-    if len(segments) == 1:
-        return segments[0]
-
-    all_freqs = np.concatenate([s.freqs_mhz for s in segments])
-    all_power = np.concatenate([s.power_db for s in segments])
-
-    # Sort by frequency
-    order = np.argsort(all_freqs)
-    all_freqs = all_freqs[order]
-    all_power = all_power[order]
-
-    return SpectrumResult(
-        freqs_mhz=all_freqs,
-        power_db=all_power,
-        center_freq_mhz=(all_freqs[0] + all_freqs[-1]) / 2,
-        sample_rate=segments[0].sample_rate,
-    )
-
-
-def trim_waterfall(result: WaterfallResult, trim_frac: float = 0.10) -> WaterfallResult:
-    """Trim the outer edges of a waterfall to remove rolloff artifacts."""
-    n = len(result.freqs_mhz)
-    cut = int(n * trim_frac)
-    if cut == 0:
-        return result
-    return WaterfallResult(
-        freqs_mhz=result.freqs_mhz[cut:-cut],
-        times=result.times,
-        power_db=result.power_db[cut:-cut, :],
-        mean_psd_db=result.mean_psd_db[cut:-cut],
-        center_freq_mhz=result.center_freq_mhz,
-    )
-
-
-def stitch_waterfalls(segments: list[WaterfallResult]) -> WaterfallResult:
-    """Stitch multiple waterfall segments along the frequency axis.
-
-    Each segment was captured sequentially (not simultaneously), so the
-    time axis represents time-within-chunk, not absolute time.
-    Segments must be sorted by frequency (ascending center freq).
-    """
-    if len(segments) == 1:
-        return segments[0]
-
-    # Resample all segments to the same number of time bins (use minimum)
-    min_time_bins = min(s.power_db.shape[1] for s in segments)
-    times = segments[0].times[:min_time_bins]
-
-    all_freqs = []
-    all_power = []
-    all_psd = []
-
-    for s in segments:
-        all_freqs.append(s.freqs_mhz)
-        all_power.append(s.power_db[:, :min_time_bins])
-        all_psd.append(s.mean_psd_db)
-
-    freqs = np.concatenate(all_freqs)
-    power = np.concatenate(all_power, axis=0)
-    psd = np.concatenate(all_psd)
-
-    # Sort by frequency
-    order = np.argsort(freqs)
-    freqs = freqs[order]
-    power = power[order, :]
-    psd = psd[order]
-
-    return WaterfallResult(
-        freqs_mhz=freqs,
-        times=times,
-        power_db=power,
-        mean_psd_db=psd,
-        center_freq_mhz=(freqs[0] + freqs[-1]) / 2,
-    )
-
-
-# ── Waterfall ───────────────────────────────────────────
-
-def compute_waterfall(
-    capture: CaptureResult,
-    nfft: int = 1024,
-) -> WaterfallResult:
-    """Compute spectrogram (waterfall) from captured I/Q samples.
-
-    Args:
-        capture: CaptureResult from SDR device.
-        nfft: FFT size per time slice.
-
-    Returns:
-        WaterfallResult with 2D time-frequency power data.
-    """
+def compute_waterfall(capture: CaptureResult, nfft: int = 1024) -> WaterfallResult:
+    """Compute spectrogram (waterfall) from captured I/Q samples."""
     fs = capture.config.sample_rate
     fc = capture.config.center_freq
 
@@ -212,18 +45,28 @@ def compute_waterfall(
         return_onesided=False,
         mode="psd",
     )
-
     freqs = np.fft.fftshift(freqs)
     Sxx = np.fft.fftshift(Sxx, axes=0)
 
-    freqs_mhz = (freqs + fc) / 1e6
     power_db = 10 * np.log10(Sxx + 1e-12)
-    mean_psd_db = np.mean(power_db, axis=1)
 
     return WaterfallResult(
-        freqs_mhz=freqs_mhz,
+        freqs_mhz=(freqs + fc) / 1e6,
         times=times,
         power_db=power_db,
-        mean_psd_db=mean_psd_db,
+        mean_psd_db=np.mean(power_db, axis=1),
         center_freq_mhz=fc / 1e6,
     )
+
+
+def downsample_2d(arr: np.ndarray, max_freq: int = 2048, max_time: int = 1024) -> np.ndarray:
+    """Downsample a 2D array (freq x time) by block-averaging."""
+    nf, nt = arr.shape
+    step_f = max(1, nf // max_freq)
+    step_t = max(1, nt // max_time)
+    if step_f > 1 or step_t > 1:
+        nf_trim = (nf // step_f) * step_f
+        nt_trim = (nt // step_t) * step_t
+        arr = arr[:nf_trim, :nt_trim]
+        arr = arr.reshape(nf_trim // step_f, step_f, nt_trim // step_t, step_t).mean(axis=(1, 3))
+    return arr
