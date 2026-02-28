@@ -107,7 +107,7 @@ export default function ControlPanel({
       {isLive ? (
         <div className="space-y-3">
           <ParamSlider label="Center Freq" value={centerMhz} onChange={onCenterMhzChange}
-            min={24} max={1766} step={0.001} unit="MHz" logScale nudgeSteps={[0.001, 0.0125, 0.1]} />
+            min={24} max={1766} step={0.1} unit="MHz" logScale nudgeSteps={[0.1, 1, 10]} />
         </div>
       ) : (
         <>
