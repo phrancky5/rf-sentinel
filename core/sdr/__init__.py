@@ -5,8 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+import logging
+
 import numpy as np
 from rtlsdr import RtlSdr
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -76,7 +80,14 @@ class SDRDevice:
         actual_duration = num_samples / config.sample_rate
 
         # Discard first chunk — PLL settling
-        self._sdr.read_samples(256 * 1024)
+        try:
+            self._sdr.read_samples(256 * 1024)
+        except Exception as exc:
+            raise RuntimeError(
+                f"USB read failed on settle chunk (freq={config.center_freq/1e6:.1f} MHz, "
+                f"rate={config.sample_rate/1e6:.1f} MHz). "
+                "Device may need a replug."
+            ) from exc
 
         # Read in chunks to avoid memory spikes
         chunk_size = 256 * 1024
@@ -85,7 +96,18 @@ class SDRDevice:
 
         while remaining > 0:
             n = min(chunk_size, remaining)
-            chunks.append(self._sdr.read_samples(n))
+            try:
+                chunks.append(self._sdr.read_samples(n))
+            except Exception as exc:
+                log.error(
+                    "USB read failed on chunk %d/%d (got %d/%d samples). "
+                    "Device may need a replug.",
+                    len(chunks) + 1,
+                    -(-num_samples // chunk_size),
+                    sum(len(c) for c in chunks),
+                    num_samples,
+                )
+                raise
             remaining -= n
 
         samples = np.concatenate(chunks)

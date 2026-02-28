@@ -62,6 +62,8 @@ class JobRunner:
 
     def submit_scan(self, start_mhz: float, stop_mhz: float,
                     duration: float, gain: float) -> Job:
+        if self._live_active:
+            self.stop_live()
         job_id = uuid.uuid4().hex[:12]
         job = Job(
             id=job_id,
@@ -76,6 +78,8 @@ class JobRunner:
 
     def submit_waterfall(self, start_mhz: float, stop_mhz: float,
                          duration: float, gain: float) -> Job:
+        if self._live_active:
+            self.stop_live()
         job_id = uuid.uuid4().hex[:12]
         job = Job(
             id=job_id,
