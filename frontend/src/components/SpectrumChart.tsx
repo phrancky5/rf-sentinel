@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, useCallback } from 'react';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 
@@ -131,24 +131,101 @@ function clickPlugin(
   };
 }
 
-// ── Y-axis control ───────────────────────────────────────
+// ── Dual-thumb range slider ──────────────────────────────
 
-function YAxisControl({ label, value, onChange, min, max, step, unit }: {
-  label: string; value: number; onChange: (v: number) => void;
-  min: number; max: number; step: number; unit: string;
+const hThumb = 'absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-cyan-400 cursor-ew-resize hover:bg-cyan-300 z-10';
+const vThumb = 'absolute left-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-cyan-400 cursor-ns-resize hover:bg-cyan-300 z-10';
+
+function DualRangeSlider({ lo, hi, min, max, onChange, onReset, vertical, snapStep = 0.1, precision = 1 }: {
+  lo: number; hi: number; min: number; max: number;
+  onChange: (lo: number, hi: number) => void;
+  onReset: () => void;
+  vertical?: boolean;
+  snapStep?: number;
+  precision?: number;
 }) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const valToFrac = (v: number) => max > min ? (v - min) / (max - min) : 0;
+  const fracToVal = (f: number) => min + f * (max - min);
+  const snap = (v: number) => { const m = 1 / snapStep; return Math.round(v * m) / m; };
+
+  const startDrag = useCallback((mode: 'lo' | 'hi' | 'pan', e: React.MouseEvent) => {
+    e.preventDefault();
+    const track = trackRef.current;
+    if (!track) return;
+    const rect = track.getBoundingClientRect();
+    const startPos = vertical ? e.clientY : e.clientX;
+    const size = vertical ? rect.height : rect.width;
+    const startLo = lo;
+    const startHi = hi;
+
+    const onMove = (ev: MouseEvent) => {
+      const pos = vertical ? ev.clientY : ev.clientX;
+      const df = ((pos - startPos) / size) * (vertical ? -1 : 1);
+      if (mode === 'lo') {
+        onChange(snap(Math.max(min, Math.min(hi - snapStep, fracToVal(valToFrac(startLo) + df)))), hi);
+      } else if (mode === 'hi') {
+        onChange(lo, snap(Math.max(lo + snapStep, Math.min(max, fracToVal(valToFrac(startHi) + df)))));
+      } else {
+        const span = startHi - startLo;
+        let nLo = fracToVal(valToFrac(startLo) + df);
+        let nHi = nLo + span;
+        if (nLo < min) { nLo = min; nHi = min + span; }
+        if (nHi > max) { nHi = max; nLo = max - span; }
+        onChange(snap(nLo), snap(nHi));
+      }
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [lo, hi, min, max, onChange, vertical, snapStep]);
+
+  if (vertical) {
+    const hiTop = (1 - valToFrac(hi)) * 100;
+    const loTop = (1 - valToFrac(lo)) * 100;
+    return (
+      <div className="flex flex-col items-center h-full py-1">
+        <span className="text-[9px] text-gray-500 font-mono">{hi.toFixed(precision)}</span>
+        <div ref={trackRef} className="relative w-3 flex-1 flex justify-center" onDoubleClick={onReset}>
+          <div className="absolute inset-y-0 w-1 rounded-full bg-gray-700" />
+          <div
+            className="absolute w-1 rounded-full bg-cyan-600/50 cursor-grab active:cursor-grabbing"
+            style={{ top: `${hiTop}%`, bottom: `${100 - loTop}%` }}
+            onMouseDown={e => startDrag('pan', e)}
+          />
+          <div className={vThumb} style={{ top: `${hiTop}%` }}
+            onMouseDown={e => startDrag('hi', e)} />
+          <div className={vThumb} style={{ top: `${loTop}%` }}
+            onMouseDown={e => startDrag('lo', e)} />
+        </div>
+        <span className="text-[9px] text-gray-500 font-mono">{lo.toFixed(precision)}</span>
+      </div>
+    );
+  }
+
+  const loFrac = valToFrac(lo) * 100;
+  const hiFrac = valToFrac(hi) * 100;
   return (
-    <div className="flex items-center gap-1">
-      <span className="text-[10px] text-gray-500">{label}</span>
-      <input
-        type="range"
-        min={min} max={max} step={step} value={value}
-        onChange={e => onChange(Number(e.target.value))}
-        className="w-14 h-1 accent-cyan-500"
-      />
-      <span className="text-[10px] text-gray-400 font-mono w-12 text-right">
-        {value} {unit}
-      </span>
+    <div className="flex items-center gap-2 w-full px-1">
+      <span className="text-[10px] text-gray-500 font-mono w-14 flex-shrink-0">{lo.toFixed(precision)}</span>
+      <div ref={trackRef} className="relative w-full h-3 flex items-center" onDoubleClick={onReset}>
+        <div className="absolute inset-x-0 h-1 rounded-full bg-gray-700" />
+        <div
+          className="absolute h-1 rounded-full bg-cyan-600/50 cursor-grab active:cursor-grabbing"
+          style={{ left: `${loFrac}%`, right: `${100 - hiFrac}%` }}
+          onMouseDown={e => startDrag('pan', e)}
+        />
+        <div className={hThumb} style={{ left: `${loFrac}%` }}
+          onMouseDown={e => startDrag('lo', e)} />
+        <div className={hThumb} style={{ left: `${hiFrac}%` }}
+          onMouseDown={e => startDrag('hi', e)} />
+      </div>
+      <span className="text-[10px] text-gray-500 font-mono w-14 flex-shrink-0 text-right">{hi.toFixed(precision)}</span>
+      <button onClick={onReset}
+        className="text-[10px] text-gray-500 hover:text-cyan-400 transition-colors flex-shrink-0">⟲</button>
     </div>
   );
 }
@@ -156,6 +233,8 @@ function YAxisControl({ label, value, onChange, min, max, step, unit }: {
 // ── Component ────────────────────────────────────────────
 
 const TITLE_H = 28;
+const XZOOM_H = 24;
+const YZOOM_W = 24;
 
 export default function SpectrumChart({
   frame, mode, onPeakClick,
@@ -168,12 +247,21 @@ export default function SpectrumChart({
   const onPeakClickRef = useRef(onPeakClick);
   onPeakClickRef.current = onPeakClick;
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 400, h: 300 });
-  const [yRange, setYRange] = useState(80);
-  const [yOffset, setYOffset] = useState(-30);
-  const yRangeRef = useRef(yRange);
-  const yOffsetRef = useRef(yOffset);
-  yRangeRef.current = yRange;
-  yOffsetRef.current = yOffset;
+  const [yLo, setYLo] = useState(-150);
+  const [yHi, setYHi] = useState(0);
+  const yLoRef = useRef(yLo);
+  const yHiRef = useRef(yHi);
+  yLoRef.current = yLo;
+  yHiRef.current = yHi;
+  const [dataXMin, setDataXMin] = useState(24);
+  const [dataXMax, setDataXMax] = useState(1766);
+  const [xStart, setXStart] = useState(24);
+  const [xEnd, setXEnd] = useState(1766);
+  const xStartRef = useRef(xStart);
+  const xEndRef = useRef(xEnd);
+  xStartRef.current = xStart;
+  xEndRef.current = xEnd;
+  const prevDataRange = useRef('');
 
   // Measure container
   useEffect(() => {
@@ -181,7 +269,7 @@ export default function SpectrumChart({
     if (!el) return;
     const ro = new ResizeObserver(entries => {
       const { width, height } = entries[0].contentRect;
-      if (width > 0 && height > 0) setSize({ w: Math.floor(width), h: Math.floor(height) - TITLE_H });
+      if (width > 0 && height > 0) setSize({ w: Math.floor(width) - YZOOM_W, h: Math.floor(height) - TITLE_H - XZOOM_H });
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -226,7 +314,7 @@ export default function SpectrumChart({
       pxAlign: 0,
       scales: {
         x: { time: false },
-        y: {},
+        y: { auto: false },
       },
       axes: [
         {
@@ -288,6 +376,17 @@ export default function SpectrumChart({
     const { freqs_mhz, power_db, peaks } = frame;
     peaksRef.current = peaks;
 
+    const rangeKey = `${freqs_mhz[0]}:${freqs_mhz[freqs_mhz.length - 1]}`;
+    if (rangeKey !== prevDataRange.current) {
+      prevDataRange.current = rangeKey;
+      setDataXMin(freqs_mhz[0]);
+      setDataXMax(freqs_mhz[freqs_mhz.length - 1]);
+      setXStart(freqs_mhz[0]);
+      setXEnd(freqs_mhz[freqs_mhz.length - 1]);
+      xStartRef.current = freqs_mhz[0];
+      xEndRef.current = freqs_mhz[freqs_mhz.length - 1];
+    }
+
     let data: uPlot.AlignedData;
     if (mode === 'live') {
       if (!maxHoldRef.current || maxHoldRef.current.length !== power_db.length) {
@@ -308,10 +407,8 @@ export default function SpectrumChart({
 
     chart.batch(() => {
       chart.setData(data, true);
-      chart.setScale('y', {
-        min: yOffsetRef.current - yRangeRef.current / 2,
-        max: yOffsetRef.current + yRangeRef.current / 2,
-      });
+      chart.setScale('x', { min: xStartRef.current, max: xEndRef.current });
+      chart.setScale('y', { min: yLoRef.current, max: yHiRef.current });
     });
   }, [frame, mode]);
 
@@ -321,11 +418,12 @@ export default function SpectrumChart({
   }, [frame?.freqs_mhz?.[0], frame?.freqs_mhz?.[frame?.freqs_mhz?.length - 1]]);
 
   useEffect(() => {
-    chartRef.current?.setScale('y', {
-      min: yOffset - yRange / 2,
-      max: yOffset + yRange / 2,
-    });
-  }, [yRange, yOffset]);
+    chartRef.current?.setScale('y', { min: yLo, max: yHi });
+  }, [yLo, yHi]);
+
+  useEffect(() => {
+    chartRef.current?.setScale('x', { min: xStart, max: xEnd });
+  }, [xStart, xEnd]);
 
   const fMin = frame?.freqs_mhz?.[0];
   const fMax = frame?.freqs_mhz?.[frame?.freqs_mhz?.length - 1];
@@ -333,7 +431,7 @@ export default function SpectrumChart({
 
   return (
     <div ref={wrapRef} className="w-full h-full flex flex-col">
-      <div className="flex items-center justify-between px-3 flex-shrink-0" style={{ height: TITLE_H }}>
+      <div className="flex items-center px-3 flex-shrink-0" style={{ height: TITLE_H }}>
         <div className="flex items-center gap-2">
           {mode === 'live' && (
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
@@ -348,14 +446,21 @@ export default function SpectrumChart({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-3">
-          <YAxisControl label="Range" value={yRange} onChange={setYRange}
-            min={10} max={150} step={5} unit="dB" />
-          <YAxisControl label="Offset" value={yOffset} onChange={setYOffset}
-            min={-120} max={20} step={5} unit="dB" />
+      </div>
+      <div className="flex-shrink-0" style={{ height: XZOOM_H }}>
+        <DualRangeSlider lo={xStart} hi={xEnd} min={dataXMin} max={dataXMax}
+          onChange={(lo, hi) => { setXStart(lo); setXEnd(hi); }}
+          onReset={() => { setXStart(dataXMin); setXEnd(dataXMax); }} />
+      </div>
+      <div className="flex flex-1 min-h-0">
+        <div ref={chartContainerRef} className="flex-1 overflow-hidden rounded-lg" />
+        <div className="flex-shrink-0" style={{ width: YZOOM_W }}>
+          <DualRangeSlider lo={yLo} hi={yHi} min={-150} max={0} vertical
+            snapStep={1} precision={0}
+            onChange={(lo, hi) => { setYLo(lo); setYHi(hi); }}
+            onReset={() => { setYLo(-150); setYHi(0); }} />
         </div>
       </div>
-      <div ref={chartContainerRef} className="flex-1 overflow-hidden rounded-lg" />
     </div>
   );
 }
