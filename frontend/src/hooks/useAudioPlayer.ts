@@ -167,10 +167,6 @@ interface UseAudioPlayerReturn {
 
 const LOG_PREFIX = '[AudioPlayer]';
 
-function log(...args: unknown[]) {
-  console.log(LOG_PREFIX, ...args);
-}
-
 function logWarn(...args: unknown[]) {
   console.warn(LOG_PREFIX, ...args);
 }
@@ -185,10 +181,7 @@ export function useAudioPlayer(audioWsUrl?: string): UseAudioPlayerReturn {
   const [stateForRender, setStateForRender] = useState<AudioState>('stopped');
 
   useEffect(() => {
-    return () => {
-      log('unmounting, cleaning up');
-      stopInternal();
-    };
+    return () => stopInternal();
   }, []);
 
   function stopInternal() {
@@ -214,14 +207,10 @@ export function useAudioPlayer(audioWsUrl?: string): UseAudioPlayerReturn {
   }
 
   const start = useCallback(async () => {
-    if (stateRef.current === 'running' || stateRef.current === 'starting') {
-      log('already', stateRef.current);
-      return;
-    }
+    if (stateRef.current === 'running' || stateRef.current === 'starting') return;
 
     stateRef.current = 'starting';
     setStateForRender('starting');
-    log('initializing AudioContext @ 48kHz');
 
     try {
       const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
@@ -230,7 +219,6 @@ export function useAudioPlayer(audioWsUrl?: string): UseAudioPlayerReturn {
       // Load worklet from blob URL
       const workletBlob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
       const workletUrl = URL.createObjectURL(workletBlob);
-      log('loading worklet module');
       await ctx.audioWorklet.addModule(workletUrl);
       URL.revokeObjectURL(workletUrl);
 
@@ -240,12 +228,8 @@ export function useAudioPlayer(audioWsUrl?: string): UseAudioPlayerReturn {
       workletRef.current = worklet;
 
       worklet.port.onmessage = (e) => {
-        const msg = e.data;
-        if (msg.type === 'underrun') {
-          logWarn(`buffer underrun #${msg.count} (buffered: ${msg.buffered})`);
-        } else if (msg.type === 'status') {
-          const ms = ((msg.buffered / SAMPLE_RATE) * 1000).toFixed(0);
-          log(`worklet: ${ms}ms buf, ${msg.underruns} underruns, rate=${msg.rate ?? '?'}`);
+        if (e.data.type === 'underrun') {
+          logWarn(`buffer underrun #${e.data.count} (buffered: ${e.data.buffered})`);
         }
       };
 
@@ -257,10 +241,7 @@ export function useAudioPlayer(audioWsUrl?: string): UseAudioPlayerReturn {
       worklet.connect(gain);
       gain.connect(ctx.destination);
 
-      if (ctx.state === 'suspended') {
-        log('resuming suspended AudioContext');
-        await ctx.resume();
-      }
+      if (ctx.state === 'suspended') await ctx.resume();
 
       // Set up Worker + MessageChannel for off-main-thread audio delivery
       if (audioWsUrl) {
@@ -275,17 +256,14 @@ export function useAudioPlayer(audioWsUrl?: string): UseAudioPlayerReturn {
         workerRef.current = worker;
 
         worker.onmessage = (e) => {
-          if (e.data.type === 'ws-open') log('audio WS connected');
-          else if (e.data.type === 'ws-close') logWarn('audio WS disconnected');
+          if (e.data.type === 'ws-close') logWarn('audio WS disconnected');
         };
 
         worker.postMessage({ type: 'init', url: audioWsUrl, port: channel.port2 }, [channel.port2]);
-        log('audio Worker started');
       }
 
       stateRef.current = 'running';
       setStateForRender('running');
-      log(`started: sampleRate=${ctx.sampleRate} state=${ctx.state}`);
     } catch (err) {
       console.error(LOG_PREFIX, 'failed to start:', err);
       stateRef.current = 'error';
@@ -294,16 +272,11 @@ export function useAudioPlayer(audioWsUrl?: string): UseAudioPlayerReturn {
     }
   }, [audioWsUrl]);
 
-  const stop = useCallback(() => {
-    log('stopping');
-    stopInternal();
-  }, []);
+  const stop = useCallback(() => stopInternal(), []);
 
   const setVolume = useCallback((v: number) => {
     if (gainRef.current) {
-      const clamped = Math.max(0, Math.min(1, v));
-      gainRef.current.gain.value = clamped;
-      log('volume →', clamped.toFixed(2));
+      gainRef.current.gain.value = Math.max(0, Math.min(1, v));
     }
   }, []);
 

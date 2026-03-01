@@ -282,9 +282,6 @@ class JobRunner:
         self._audio_enabled = audio_enabled
         self._demod_mode = demod_mode
         self._demod_state = None
-        logger.info("live start: audio=%s demod=%s sr=%.0f Hz",
-                     audio_enabled, demod_mode, sample_rate)
-
         self._live_active = True
         self._live_thread = threading.Thread(
             target=self._live_loop,
@@ -306,7 +303,6 @@ class JobRunner:
             self._live_thread = None
         self._live_sdr = None
         self._live_config = None
-        logger.info("live stopped")
         _emit("live", "Live stopped")
 
     def retune_live(self, start_mhz: float, stop_mhz: float, gain: float) -> None:
@@ -334,7 +330,7 @@ class JobRunner:
             gain=gain, duration=0,
         )
         self._demod_state = None
-        _emit("live", f"Retune → {start_mhz:.1f}–{stop_mhz:.1f} MHz, gain={gain:.0f} dB")
+        logger.debug("retune: fc=%.3f MHz gain=%.0f dB", center_hz / 1e6, gain)
 
     def toggle_audio(self, enabled: bool, demod_mode: DemodMode = DemodMode.FM) -> None:
         """Toggle audio demod on/off while live is running."""
@@ -342,7 +338,6 @@ class JobRunner:
         self._demod_mode = demod_mode
         self._demod_state = None
         state = f"ON ({demod_mode.upper()})" if enabled else "OFF"
-        logger.info("audio toggled: %s", state)
         _emit("live", f"Audio {state}")
 
     @property
@@ -426,9 +421,6 @@ class JobRunner:
                 )
                 sdr.configure(self._live_config)
                 chunk_samples = int(sample_rate * 0.1)
-                logger.info("live streaming: fc=%.3f MHz sr=%.0f Hz gain=%.0f dB",
-                            center_hz / 1e6, sample_rate, gain)
-
                 def on_chunk(iq):
                     nonlocal frame_count
                     if not self._live_active:
@@ -454,5 +446,5 @@ class JobRunner:
             self._audio_enabled = False
             self._live_sdr = None
             self._live_config = None
-            logger.info("live loop exited after %d frames", frame_count)
+            logger.debug("live loop exited after %d frames", frame_count)
 
