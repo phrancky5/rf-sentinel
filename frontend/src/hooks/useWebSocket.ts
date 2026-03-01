@@ -9,14 +9,15 @@ export interface LogEntry {
 
 const MAX_JOBS = 20;
 
-export function useWebSocket(url: string) {
+export function useWebSocket(url: string, onSpectrum?: (data: any) => void) {
   const [connected, setConnected] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [jobs, setJobs] = useState<JobInfo[]>([]);
-  const [lastMessage, setLastMessage] = useState<any>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<number>();
   const disposed = useRef(false);
+  const onSpectrumRef = useRef(onSpectrum);
+  onSpectrumRef.current = onSpectrum;
 
   const connect = useCallback(() => {
     if (disposed.current) return;
@@ -46,7 +47,7 @@ export function useWebSocket(url: string) {
             timestamp: Date.now(),
           }]);
         } else if (data.type === 'spectrum') {
-          setLastMessage(data);
+          onSpectrumRef.current?.(data);
         } else if (data.type === 'job_update') {
           const job: JobInfo = data.job;
           setJobs(prev => {
@@ -88,5 +89,5 @@ export function useWebSocket(url: string) {
 
   const clearLogs = useCallback(() => setLogs([]), []);
 
-  return { connected, logs, clearLogs, lastMessage, jobs };
+  return { connected, logs, clearLogs, jobs };
 }

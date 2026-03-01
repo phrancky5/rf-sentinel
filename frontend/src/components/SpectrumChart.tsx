@@ -402,6 +402,8 @@ export default function SpectrumChart({
   const maxHoldRef = useRef<number[] | null>(null);
   const onFreqClickRef = useRef(onFreqClick);
   onFreqClickRef.current = onFreqClick;
+  const onViewChangeRef = useRef(onViewChange);
+  onViewChangeRef.current = onViewChange;
   const vfoRef = useRef<number | null>(vfoFreq ?? null);
   vfoRef.current = vfoFreq ?? null;
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 400, h: 300 });
@@ -413,7 +415,7 @@ export default function SpectrumChart({
   const [xEnd, setXEnd, xEndRef] = useStateRef(1766);
   const prevDataRange = useRef('');
   const dbHistoryRef = useRef<{ min: number; max: number; t: number }[]>([]);
-  const [dbRange, setDbRange] = useState<{ min: number; max: number } | null>(null);
+  const dbRangeRef = useRef<{ min: number; max: number } | null>(null);
   const [plotPad, setPlotPad] = useState({ left: 0, right: 0 });
   const syncPlotPad = useCallback(() => {
     const c = chartRef.current;
@@ -556,9 +558,7 @@ export default function SpectrumChart({
         if (h.min < wMin) wMin = h.min;
         if (h.max > wMax) wMax = h.max;
       }
-      setDbRange(prev =>
-        prev && prev.min === wMin && prev.max === wMax ? prev : { min: wMin, max: wMax },
-      );
+      dbRangeRef.current = { min: Math.floor(wMin), max: Math.ceil(wMax) };
     }
 
     const rangeKey = `${freqs_mhz[0]}:${freqs_mhz[freqs_mhz.length - 1]}`;
@@ -612,8 +612,8 @@ export default function SpectrumChart({
 
   useEffect(() => {
     chartRef.current?.setScale('x', { min: xStart, max: xEnd });
-    onViewChange?.({ xStart, xEnd, padLeft: plotPad.left, padRight: plotPad.right + YZOOM_W });
-  }, [xStart, xEnd, plotPad]);
+    onViewChangeRef.current?.({ xStart, xEnd, padLeft: plotPad.left, padRight: plotPad.right + YZOOM_W });
+  }, [xStart, xEnd, plotPad.left, plotPad.right]);
 
   useEffect(() => {
     chartRef.current?.redraw(false);
@@ -634,9 +634,9 @@ export default function SpectrumChart({
   }
 
   const ySliderMarkers: SliderMarker[] = [];
-  if (dbRange) {
-    ySliderMarkers.push({ pos: dbRange.min, color: PEAK });
-    ySliderMarkers.push({ pos: dbRange.max, color: PEAK });
+  if (dbRangeRef.current) {
+    ySliderMarkers.push({ pos: dbRangeRef.current.min, color: PEAK });
+    ySliderMarkers.push({ pos: dbRangeRef.current.max, color: PEAK });
   }
 
   return (

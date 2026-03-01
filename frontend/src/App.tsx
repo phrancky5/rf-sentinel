@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useWebSocket, LogEntry } from './hooks/useWebSocket';
 import { useAudioPlayer } from './hooks/useAudioPlayer';
 import { JobInfo, setVfo, toggleAudio } from './api';
@@ -121,12 +121,38 @@ function MainContent({ liveActive, liveFrame, selectedJob, logs, connected, onCl
 
 export default function App() {
   const audio = useAudioPlayer(AUDIO_WS_URL);
-  const { connected, logs, clearLogs, lastMessage, jobs } = useWebSocket(WS_URL);
   const [selectedJob, setSelectedJob] = useState<JobInfo | null>(null);
   const [liveActive, setLiveActive] = useState(false);
   const [liveFrame, setLiveFrame] = useState<SpectrumFrame | null>(null);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [vfoFreq, setVfoFreq] = useState<number | null>(null);
+  const audioRef = useRef(audio);
+  audioRef.current = audio;
+
+  const handleSpectrum = useCallback((data: any) => {
+    const freqs: number[] = data.freqs_mhz;
+    setLiveFrame({
+      freqs_mhz: freqs,
+      power_db: data.power_db,
+      peaks: data.peaks,
+    });
+    const center = (freqs[0] + freqs[freqs.length - 1]) / 2;
+    setVfoFreq(prev => {
+      if (prev != null) {
+        if (prev < freqs[0] || prev > freqs[freqs.length - 1]) {
+          setAudioEnabled(false);
+          audioRef.current.stop();
+          setVfo(center).catch(() => {});
+          return center;
+        }
+        return prev;
+      }
+      setVfo(center).catch(() => {});
+      return center;
+    });
+  }, []);
+
+  const { connected, logs, clearLogs, jobs } = useWebSocket(WS_URL, handleSpectrum);
 
   const handleFreqClick = useCallback((freq_mhz: number) => {
     if (!liveActive) return;
@@ -138,31 +164,6 @@ export default function App() {
       audio.start();
     }
   }, [liveActive, audioEnabled, audio]);
-
-  useEffect(() => {
-    if (lastMessage && lastMessage.type === 'spectrum') {
-      const freqs: number[] = lastMessage.freqs_mhz;
-      setLiveFrame({
-        freqs_mhz: freqs,
-        power_db: lastMessage.power_db,
-        peaks: lastMessage.peaks,
-      });
-      const center = (freqs[0] + freqs[freqs.length - 1]) / 2;
-      setVfoFreq(prev => {
-        if (prev != null) {
-          if (prev < freqs[0] || prev > freqs[freqs.length - 1]) {
-            setAudioEnabled(false);
-            audio.stop();
-            setVfo(center).catch(() => {});
-            return center;
-          }
-          return prev;
-        }
-        setVfo(center).catch(() => {});
-        return center;
-      });
-    }
-  }, [lastMessage, audio]);
 
   const handleLiveToggle = useCallback((active: boolean) => {
     setLiveActive(active);

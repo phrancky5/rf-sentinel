@@ -8,7 +8,7 @@ interface Props {
 
 const TARGET_SECONDS = 60;
 const BG_R = 10, BG_G = 14, BG_B = 26;
-const BG_U32 = (255 << 24) | (BG_B << 16) | (BG_G << 8) | BG_R; // little-endian ABGR
+const BG_U32 = (255 << 24) | (BG_B << 16) | (BG_G << 8) | BG_R;
 
 const LUT = buildLut();
 function buildLut(): Uint8Array {
@@ -47,16 +47,18 @@ export default function WaterfallCanvas({ frame, view }: Props) {
   const dbMaxRef = useRef(-20);
   const viewRef = useRef<ChartView | null>(null);
   const rowsRef = useRef<Row[]>([]);
-  const bufRef = useRef<{ imgData: ImageData; u32: Uint32Array; w: number; h: number } | null>(null);
+  const wfRef = useRef<{ imgData: ImageData; u32: Uint32Array; w: number; h: number } | null>(null);
+  const lastDrawRef = useRef(0);
 
-  function getBuf(w: number, h: number) {
-    const b = bufRef.current;
+  function getWf(w: number, h: number) {
+    const b = wfRef.current;
     if (b && b.w === w && b.h === h) return b;
     const imgData = new ImageData(w, h);
     const u32 = new Uint32Array(imgData.data.buffer);
-    const buf = { imgData, u32, w, h };
-    bufRef.current = buf;
-    return buf;
+    u32.fill(BG_U32);
+    const wf = { imgData, u32, w, h };
+    wfRef.current = wf;
+    return wf;
   }
 
   useEffect(() => {
@@ -78,7 +80,7 @@ export default function WaterfallCanvas({ frame, view }: Props) {
     cvs.height = size.h * dpr;
     cvs.style.width = `${size.w}px`;
     cvs.style.height = `${size.h}px`;
-    redraw();
+    fullRedraw();
   }, [size]);
 
   useEffect(() => {
@@ -99,50 +101,97 @@ export default function WaterfallCanvas({ frame, view }: Props) {
     dbMinRef.current += 0.05 * (fMin - dbMinRef.current);
     dbMaxRef.current += 0.05 * (fMax - dbMaxRef.current);
 
+    const pv = viewRef.current;
     viewRef.current = view;
-    redraw();
+
+    if (pv && (pv.xStart !== view.xStart || pv.xEnd !== view.xEnd || pv.padLeft !== view.padLeft || pv.padRight !== view.padRight)) {
+      lastDrawRef.current = now;
+      fullRedraw();
+    } else {
+      const m = getDataMetrics();
+      if (!m || m.devH <= 0) return;
+      const msPerPx = (TARGET_SECONDS * 1000) / m.devH;
+      const elapsed = lastDrawRef.current > 0 ? now - lastDrawRef.current : 0;
+      if (elapsed < msPerPx) { if (!lastDrawRef.current) lastDrawRef.current = now; return; }
+      const rowH = Math.min(m.devH, Math.max(1, Math.round(elapsed / msPerPx)));
+      lastDrawRef.current = now;
+      scrollAndDraw(frame.freqs_mhz, frame.power_db, view, rowH);
+    }
   }, [frame]);
 
   useEffect(() => {
     if (!view) return;
     viewRef.current = view;
-    redraw();
+    fullRedraw();
   }, [view?.xStart, view?.xEnd, view?.padLeft, view?.padRight]);
 
-  function redraw() {
+  function getDataMetrics() {
+    const cvs = canvasRef.current;
+    if (!cvs) return null;
+    const v = viewRef.current;
+    if (!v) return null;
+    const dpr = window.devicePixelRatio || 1;
+    const dataLeft = Math.round(v.padLeft * dpr);
+    const dataRight = cvs.width - Math.round(v.padRight * dpr);
+    return { dataLeft, dataW: dataRight - dataLeft, devH: cvs.height };
+  }
+
+  function scrollAndDraw(freqs: number[], power: number[], v: ChartView, rowH: number) {
+    const cvs = canvasRef.current;
+    if (!cvs) return;
+    const ctx = cvs.getContext('2d');
+    if (!ctx) return;
+    const m = getDataMetrics();
+    if (!m || m.dataW <= 0 || m.devH <= 0) return;
+
+    const wf = getWf(m.dataW, m.devH);
+    const pixels = wf.imgData.data;
+    const stride = m.dataW * 4;
+    const shift = rowH * stride;
+
+    // Scroll existing data down
+    pixels.copyWithin(shift, 0, pixels.length - shift);
+
+    // Render new row strip
+    const strip = renderPixels(m.dataW, v.xStart, v.xEnd, freqs, power);
+    for (let r = 0; r < rowH; r++) {
+      pixels.set(strip, r * stride);
+    }
+
+    blit(ctx, wf.imgData, m.dataLeft, m.devH);
+  }
+
+  function fullRedraw() {
     const cvs = canvasRef.current;
     if (!cvs) return;
     const ctx = cvs.getContext('2d');
     if (!ctx) return;
     const v = viewRef.current;
     if (!v) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const dataLeft = Math.round(v.padLeft * dpr);
-    const dataRight = cvs.width - Math.round(v.padRight * dpr);
-    const dataW = dataRight - dataLeft;
-    const devH = cvs.height;
-
-    ctx.fillStyle = '#0a0e1a';
-    ctx.fillRect(0, 0, cvs.width, devH);
+    const m = getDataMetrics();
+    if (!m || m.dataW <= 0 || m.devH <= 0) return;
 
     const rows = rowsRef.current;
-    if (!rows.length || dataW <= 0 || devH <= 0) return;
+    const wf = getWf(m.dataW, m.devH);
+    wf.u32.fill(BG_U32);
+
+    if (!rows.length) {
+      blit(ctx, wf.imgData, m.dataLeft, m.devH);
+      return;
+    }
 
     const now = rows[rows.length - 1].t;
     const spanMs = TARGET_SECONDS * 1000;
-    const key = v.xStart * 1e9 + v.xEnd * 1e3 + dataW;
-
-    const buf = getBuf(dataW, devH);
-    buf.u32.fill(BG_U32);
+    const key = v.xStart * 1e9 + v.xEnd * 1e3 + m.dataW;
+    const pixels = wf.imgData.data;
+    const stride = m.dataW * 4;
 
     let ri = rows.length - 1;
     let lastRow: Row | null = null;
     let lastOffset = -1;
-    const stride = dataW * 4;
 
-    for (let dy = 0; dy < devH; dy++) {
-      const ageMs = (dy / devH) * spanMs;
+    for (let dy = 0; dy < m.devH; dy++) {
+      const ageMs = (dy / m.devH) * spanMs;
       const targetT = now - ageMs;
 
       while (ri > 0 && rows[ri].t > targetT) ri--;
@@ -151,21 +200,27 @@ export default function WaterfallCanvas({ frame, view }: Props) {
       const row = rows[ri];
 
       if (!row.pixels || row.cacheKey !== key) {
-        row.pixels = renderPixels(dataW, v.xStart, v.xEnd, row.freqs, row.power);
+        row.pixels = renderPixels(m.dataW, v.xStart, v.xEnd, row.freqs, row.power);
         row.cacheKey = key;
       }
 
       const offset = dy * stride;
       if (row === lastRow && lastOffset >= 0) {
-        buf.imgData.data.copyWithin(offset, lastOffset, lastOffset + stride);
+        pixels.copyWithin(offset, lastOffset, lastOffset + stride);
       } else {
-        buf.imgData.data.set(row.pixels, offset);
+        pixels.set(row.pixels, offset);
       }
       lastRow = row;
       lastOffset = offset;
     }
 
-    ctx.putImageData(buf.imgData, dataLeft, 0);
+    blit(ctx, wf.imgData, m.dataLeft, m.devH);
+  }
+
+  function blit(ctx: CanvasRenderingContext2D, imgData: ImageData, dataLeft: number, devH: number) {
+    ctx.fillStyle = '#0a0e1a';
+    ctx.fillRect(0, 0, ctx.canvas.width, devH);
+    ctx.putImageData(imgData, dataLeft, 0);
   }
 
   function renderPixels(w: number, xStart: number, xEnd: number, freqs: number[], power: number[]): Uint8ClampedArray {
