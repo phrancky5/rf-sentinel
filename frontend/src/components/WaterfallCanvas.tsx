@@ -7,6 +7,8 @@ interface Props {
 }
 
 const TARGET_SECONDS = 60;
+const BG_R = 10, BG_G = 14, BG_B = 26;
+const BG_U32 = (255 << 24) | (BG_B << 16) | (BG_G << 8) | BG_R; // little-endian ABGR
 
 const LUT = buildLut();
 function buildLut(): Uint8Array {
@@ -45,15 +47,14 @@ export default function WaterfallCanvas({ frame, view }: Props) {
   const dbMaxRef = useRef(-20);
   const viewRef = useRef<ChartView | null>(null);
   const rowsRef = useRef<Row[]>([]);
-  const bufRef = useRef<{ canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D; imgData: ImageData; w: number; h: number } | null>(null);
+  const bufRef = useRef<{ imgData: ImageData; u32: Uint32Array; w: number; h: number } | null>(null);
 
   function getBuf(w: number, h: number) {
     const b = bufRef.current;
     if (b && b.w === w && b.h === h) return b;
-    const canvas = new OffscreenCanvas(w, h);
-    const ctx = canvas.getContext('2d')!;
-    const imgData = ctx.createImageData(w, h);
-    const buf = { canvas, ctx, imgData, w, h };
+    const imgData = new ImageData(w, h);
+    const u32 = new Uint32Array(imgData.data.buffer);
+    const buf = { imgData, u32, w, h };
     bufRef.current = buf;
     return buf;
   }
@@ -120,63 +121,61 @@ export default function WaterfallCanvas({ frame, view }: Props) {
     const dataLeft = Math.round(v.padLeft * dpr);
     const dataRight = cvs.width - Math.round(v.padRight * dpr);
     const dataW = dataRight - dataLeft;
-    const pxW = Math.round(dataW / dpr);
-    const cssH = Math.round(cvs.height / dpr);
+    const devH = cvs.height;
 
     ctx.fillStyle = '#0a0e1a';
-    ctx.fillRect(0, 0, cvs.width, cvs.height);
+    ctx.fillRect(0, 0, cvs.width, devH);
 
     const rows = rowsRef.current;
-    if (!rows.length || pxW <= 0 || cssH <= 0) return;
+    if (!rows.length || dataW <= 0 || devH <= 0) return;
 
     const now = rows[rows.length - 1].t;
     const spanMs = TARGET_SECONDS * 1000;
-    const key = v.xStart * 1e9 + v.xEnd * 1e3 + pxW;
-    const buf = getBuf(pxW, cssH);
-    const pixels = buf.imgData.data;
-    pixels.fill(0);
+    const key = v.xStart * 1e9 + v.xEnd * 1e3 + dataW;
+
+    const buf = getBuf(dataW, devH);
+    buf.u32.fill(BG_U32);
 
     let ri = rows.length - 1;
     let lastRow: Row | null = null;
     let lastOffset = -1;
+    const stride = dataW * 4;
 
-    for (let y = 0; y < cssH; y++) {
-      const ageMs = (y / cssH) * spanMs;
+    for (let dy = 0; dy < devH; dy++) {
+      const ageMs = (dy / devH) * spanMs;
       const targetT = now - ageMs;
 
       while (ri > 0 && rows[ri].t > targetT) ri--;
       if (rows[ri].t > targetT) continue;
 
       const row = rows[ri];
-      if (now - row.t > spanMs) continue;
 
       if (!row.pixels || row.cacheKey !== key) {
-        row.pixels = renderPixels(pxW, v.xStart, v.xEnd, row.freqs, row.power);
+        row.pixels = renderPixels(dataW, v.xStart, v.xEnd, row.freqs, row.power);
         row.cacheKey = key;
       }
 
-      const offset = y * pxW * 4;
+      const offset = dy * stride;
       if (row === lastRow && lastOffset >= 0) {
-        pixels.copyWithin(offset, lastOffset, lastOffset + pxW * 4);
+        buf.imgData.data.copyWithin(offset, lastOffset, lastOffset + stride);
       } else {
-        pixels.set(row.pixels, offset);
+        buf.imgData.data.set(row.pixels, offset);
       }
       lastRow = row;
       lastOffset = offset;
     }
 
-    buf.ctx.putImageData(buf.imgData, 0, 0);
-    ctx.drawImage(buf.canvas, 0, 0, pxW, cssH, dataLeft, 0, dataW, cvs.height);
+    ctx.putImageData(buf.imgData, dataLeft, 0);
   }
 
-  function renderPixels(pxW: number, xStart: number, xEnd: number, freqs: number[], power: number[]): Uint8ClampedArray {
-    const pixels = new Uint8ClampedArray(pxW * 4);
+  function renderPixels(w: number, xStart: number, xEnd: number, freqs: number[], power: number[]): Uint8ClampedArray {
+    const pixels = new Uint8ClampedArray(w * 4);
     const dbMin = dbMinRef.current;
     const dbSpan = dbMaxRef.current - dbMin;
     if (dbSpan <= 0) return pixels;
 
-    for (let px = 0; px < pxW; px++) {
-      const freq = xStart + (px / pxW) * (xEnd - xStart);
+    for (let px = 0; px < w; px++) {
+      const freq = xStart + (px / w) * (xEnd - xStart);
       const db = interpPower(freqs, power, freq);
       const ci = Math.max(0, Math.min(255, Math.round(((db - dbMin) / dbSpan) * 255)));
       pixels[px * 4] = LUT[ci * 4];
