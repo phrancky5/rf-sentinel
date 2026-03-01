@@ -1,4 +1,6 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect } from 'react';
+import uPlot from 'uplot';
+import 'uplot/dist/uPlot.min.css';
 
 export interface SpectrumFrame {
   freqs_mhz: number[];
@@ -11,226 +13,341 @@ interface Props {
   mode: 'live' | 'scan';
   width?: number;
   height?: number;
+  onPeakClick?: (freq_mhz: number) => void;
 }
 
 const BG = '#0a0e1a';
-const GRID_COLOR = 'rgba(255,255,255,0.08)';
-const AXIS_COLOR = '#606070';
-const LINE_COLOR = '#00d4ff';
-const FILL_COLOR = 'rgba(0,212,255,0.12)';
-const PEAK_COLOR = '#ff6b35';
-const TEXT_COLOR = '#a0a0a0';
+const PLOT_BG = '#0f1525';
+const GRID = 'rgba(255,255,255,0.08)';
+const AXIS = '#606070';
+const LINE = '#00d4ff';
+const FILL = 'rgba(0,212,255,0.12)';
+const PEAK = '#ff6b35';
+const MAX_HOLD_COLOR = 'rgba(255,100,50,0.25)';
 
-type MapFn = (v: number) => number;
+// ── Plugins ──────────────────────────────────────────────
 
-function drawGrid(
-  ctx: CanvasRenderingContext2D,
-  toX: MapFn, toY: MapFn,
-  fMin: number, fMax: number,
-  pMin: number, pMax: number,
-  ml: number, mt: number, pw: number, ph: number,
-): void {
-  ctx.strokeStyle = GRID_COLOR;
-  ctx.lineWidth = 1;
-
-  const pStep = Math.max(5, Math.ceil((pMax - pMin) / 8 / 5) * 5);
-  ctx.font = '10px monospace';
-  ctx.fillStyle = AXIS_COLOR;
-  ctx.textAlign = 'right';
-  for (let p = Math.ceil(pMin / pStep) * pStep; p <= pMax; p += pStep) {
-    const y = toY(p);
-    ctx.beginPath();
-    ctx.moveTo(ml, y);
-    ctx.lineTo(ml + pw, y);
-    ctx.stroke();
-    ctx.fillText(`${p}`, ml - 5, y + 3);
-  }
-
-  const fRange = fMax - fMin;
-  const fStepOptions = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10];
-  const fStep = fStepOptions.find(s => fRange / s <= 10) ?? 10;
-  ctx.textAlign = 'center';
-  for (let f = Math.ceil(fMin / fStep) * fStep; f <= fMax; f += fStep) {
-    const x = toX(f);
-    ctx.beginPath();
-    ctx.moveTo(x, mt);
-    ctx.lineTo(x, mt + ph);
-    ctx.stroke();
-    ctx.fillText(`${f.toFixed(fStep < 0.1 ? 2 : 1)}`, x, mt + ph + 15);
-  }
+function bgPlugin(): uPlot.Plugin {
+  return {
+    hooks: {
+      drawClear: (u: uPlot) => {
+        const { ctx } = u;
+        const cw = ctx.canvas.width;
+        const ch = ctx.canvas.height;
+        ctx.save();
+        ctx.fillStyle = BG;
+        ctx.fillRect(0, 0, cw, ch);
+        const { left, top, width, height } = u.bbox;
+        ctx.fillStyle = PLOT_BG;
+        ctx.fillRect(left, top, width, height);
+        ctx.restore();
+      },
+    },
+  };
 }
 
-function drawTrace(
-  ctx: CanvasRenderingContext2D,
-  toX: MapFn, toY: MapFn,
-  freqs: number[], values: number[],
-  stroke: string, lineWidth: number,
-): void {
-  ctx.beginPath();
-  ctx.strokeStyle = stroke;
-  ctx.lineWidth = lineWidth;
-  for (let i = 0; i < freqs.length; i++) {
-    const x = toX(freqs[i]);
-    const y = toY(values[i]);
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-  }
-  ctx.stroke();
+function peakMarkersPlugin(
+  peaksRef: React.MutableRefObject<SpectrumFrame['peaks']>,
+): uPlot.Plugin {
+  return {
+    hooks: {
+      draw: (u: uPlot) => {
+        const peaks = peaksRef.current;
+        if (!peaks.length) return;
+
+        const { ctx, bbox } = u;
+        const dpr = uPlot.pxRatio;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bbox.left, bbox.top, bbox.width, bbox.height);
+        ctx.clip();
+
+        ctx.fillStyle = PEAK;
+        ctx.font = `bold ${Math.round(9 * dpr)}px monospace`;
+        ctx.textAlign = 'center';
+
+        for (const pk of peaks.slice(0, 20)) {
+          const x = u.valToPos(pk.freq_mhz, 'x', true);
+          const y = u.valToPos(pk.power_db, 'y', true);
+          if (x < bbox.left || x > bbox.left + bbox.width) continue;
+
+          const s = 4 * dpr;
+          ctx.beginPath();
+          ctx.moveTo(x, y - 8 * dpr);
+          ctx.lineTo(x - s, y - 2 * dpr);
+          ctx.lineTo(x + s, y - 2 * dpr);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillText(`${pk.freq_mhz.toFixed(3)}`, x, y - 11 * dpr);
+        }
+        ctx.restore();
+      },
+    },
+  };
 }
 
-function drawSpectrum(
-  ctx: CanvasRenderingContext2D,
-  toX: MapFn, toY: MapFn,
-  freqs: number[], power: number[], pMin: number,
-): void {
-  ctx.beginPath();
-  ctx.moveTo(toX(freqs[0]), toY(pMin));
-  for (let i = 0; i < freqs.length; i++) {
-    ctx.lineTo(toX(freqs[i]), toY(power[i]));
-  }
-  ctx.lineTo(toX(freqs[freqs.length - 1]), toY(pMin));
-  ctx.closePath();
-  ctx.fillStyle = FILL_COLOR;
-  ctx.fill();
+function wheelZoomPlugin(
+  fullRangeRef: React.MutableRefObject<{ xMin: number; xMax: number } | null>,
+  factor = 0.75,
+): uPlot.Plugin {
+  return {
+    hooks: {
+      ready: (u: uPlot) => {
+        const over = u.over;
 
-  drawTrace(ctx, toX, toY, freqs, power, LINE_COLOR, 1.5);
+        over.addEventListener('wheel', (e: WheelEvent) => {
+          e.preventDefault();
+          const fr = fullRangeRef.current;
+          if (!fr) return;
+          const { left } = u.cursor;
+          if (left == null) return;
+
+          const rect = over.getBoundingClientRect();
+          const leftPct = left / rect.width;
+          const oxRange = u.scales.x.max! - u.scales.x.min!;
+          const nxRange = e.deltaY < 0 ? oxRange * factor : oxRange / factor;
+          const xVal = u.posToVal(left, 'x');
+
+          let nxMin = xVal - leftPct * nxRange;
+          let nxMax = nxMin + nxRange;
+
+          const fullW = fr.xMax - fr.xMin;
+          if (nxRange > fullW) { nxMin = fr.xMin; nxMax = fr.xMax; }
+          else if (nxMin < fr.xMin) { nxMin = fr.xMin; nxMax = fr.xMin + nxRange; }
+          else if (nxMax > fr.xMax) { nxMax = fr.xMax; nxMin = fr.xMax - nxRange; }
+
+          u.setScale('x', { min: nxMin, max: nxMax });
+        });
+
+        over.addEventListener('dblclick', () => {
+          const fr = fullRangeRef.current;
+          if (fr) u.setScale('x', { min: fr.xMin, max: fr.xMax });
+        });
+      },
+    },
+  };
 }
 
-function drawPeakMarkers(
-  ctx: CanvasRenderingContext2D,
-  toX: MapFn, toY: MapFn,
-  peaks: SpectrumFrame['peaks'],
-): void {
-  ctx.fillStyle = PEAK_COLOR;
-  ctx.font = 'bold 9px monospace';
-  ctx.textAlign = 'center';
-  for (const pk of peaks.slice(0, 20)) {
-    const x = toX(pk.freq_mhz);
-    const y = toY(pk.power_db);
-    ctx.beginPath();
-    ctx.moveTo(x, y - 8);
-    ctx.lineTo(x - 4, y - 2);
-    ctx.lineTo(x + 4, y - 2);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillText(`${pk.freq_mhz.toFixed(3)}`, x, y - 11);
-  }
+function clickPlugin(
+  peaksRef: React.MutableRefObject<SpectrumFrame['peaks']>,
+  cbRef: React.MutableRefObject<((freq_mhz: number) => void) | undefined>,
+): uPlot.Plugin {
+  return {
+    hooks: {
+      ready: (u: uPlot) => {
+        const over = u.over;
+        over.style.cursor = 'crosshair';
+
+        over.addEventListener('mousemove', (e: MouseEvent) => {
+          if (!cbRef.current) return;
+          const rect = over.getBoundingClientRect();
+          const cx = e.clientX - rect.left;
+          const cy = e.clientY - rect.top;
+          const near = peaksRef.current.some(pk => {
+            const px = u.valToPos(pk.freq_mhz, 'x');
+            const py = u.valToPos(pk.power_db, 'y');
+            return Math.hypot(px - cx, py - cy) < 15;
+          });
+          over.style.cursor = near ? 'pointer' : 'crosshair';
+        });
+
+        over.addEventListener('click', (e: MouseEvent) => {
+          if (!cbRef.current) return;
+          const rect = over.getBoundingClientRect();
+          const cx = e.clientX - rect.left;
+          const cy = e.clientY - rect.top;
+
+          let closest: SpectrumFrame['peaks'][0] | null = null;
+          let closestDist = Infinity;
+          for (const pk of peaksRef.current) {
+            const px = u.valToPos(pk.freq_mhz, 'x');
+            const py = u.valToPos(pk.power_db, 'y');
+            const dist = Math.hypot(px - cx, py - cy);
+            if (dist < 15 && dist < closestDist) {
+              closestDist = dist;
+              closest = pk;
+            }
+          }
+          if (closest) cbRef.current(closest.freq_mhz);
+        });
+      },
+    },
+  };
 }
 
-function drawTitle(
-  ctx: CanvasRenderingContext2D,
-  ml: number, mt: number, pw: number,
-  width: number, height: number,
-  fMin: number, fMax: number,
-  peaks: SpectrumFrame['peaks'],
-  mode: 'live' | 'scan',
-): void {
-  ctx.fillStyle = TEXT_COLOR;
-  ctx.font = '11px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('Frequency [MHz]', ml + pw / 2, height - 3);
+// ── Component ────────────────────────────────────────────
 
-  ctx.save();
-  ctx.translate(13, mt + (height - mt - 35) / 2);
-  ctx.rotate(-Math.PI / 2);
-  ctx.fillText('Power [dB]', 0, 0);
-  ctx.restore();
+const TITLE_H = 28;
 
-  ctx.fillStyle = '#e0e0e0';
-  ctx.font = 'bold 13px sans-serif';
-  ctx.textAlign = 'center';
-  const label = mode === 'live' ? 'LIVE' : 'SCAN';
-  const title = `${label} — ${fMin.toFixed(1)}–${fMax.toFixed(1)} MHz`;
-  const peakCount = peaks.length > 0 ? `  (${peaks.length} signal${peaks.length !== 1 ? 's' : ''})` : '';
-  ctx.fillText(title + peakCount, ml + pw / 2, 18);
-
-  if (mode === 'live') {
-    ctx.fillStyle = '#ff3333';
-    ctx.beginPath();
-    ctx.arc(ml + 8, 14, 4, 0, Math.PI * 2);
-    ctx.fill();
-  }
-}
-
-export default function SpectrumChart({ frame, mode, width = 900, height = 320 }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+export default function SpectrumChart({
+  frame, mode, width = 900, height = 400, onPeakClick,
+}: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<uPlot | null>(null);
+  const peaksRef = useRef<SpectrumFrame['peaks']>([]);
   const maxHoldRef = useRef<number[] | null>(null);
+  const fullRangeRef = useRef<{ xMin: number; xMax: number } | null>(null);
+  const prevRangeRef = useRef<string>('');
+  const onPeakClickRef = useRef(onPeakClick);
+  onPeakClickRef.current = onPeakClick;
 
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !frame || frame.freqs_mhz.length === 0) return;
+  const chartH = height - TITLE_H;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+  // Create / recreate chart when mode or dimensions change
+  useEffect(() => {
+    if (!containerRef.current) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
-    ctx.scale(dpr, dpr);
+    chartRef.current?.destroy();
+    chartRef.current = null;
+    maxHoldRef.current = null;
+    prevRangeRef.current = '';
 
-    const { freqs_mhz: freqs, power_db: power, peaks } = frame;
-
-    // Max hold only in live mode
-    let maxHold: number[] | null = null;
+    const series: uPlot.Series[] = [
+      {},
+      {
+        label: 'Power',
+        stroke: LINE,
+        width: 1.5,
+        fill: FILL,
+      },
+    ];
     if (mode === 'live') {
-      if (!maxHoldRef.current || maxHoldRef.current.length !== power.length) {
-        maxHoldRef.current = [...power];
+      series.push({
+        label: 'Max Hold',
+        stroke: MAX_HOLD_COLOR,
+        width: 1,
+      });
+    }
+
+    const axisFont = '10px monospace';
+    const labelFont = '11px sans-serif';
+
+    const opts: uPlot.Options = {
+      width,
+      height: chartH,
+      pxAlign: 0,
+      scales: {
+        x: { time: false },
+        y: {},
+      },
+      axes: [
+        {
+          stroke: AXIS,
+          grid: { stroke: GRID, width: 1 },
+          ticks: { stroke: GRID, width: 1 },
+          gap: 6,
+          size: 30,
+          font: axisFont,
+          labelFont,
+          label: 'Frequency [MHz]',
+          labelSize: 16,
+          labelGap: 2,
+        },
+        {
+          stroke: AXIS,
+          grid: { stroke: GRID, width: 1 },
+          ticks: { stroke: GRID, width: 1 },
+          gap: 6,
+          size: 45,
+          font: axisFont,
+          labelFont,
+          label: 'Power [dB]',
+          labelSize: 16,
+          labelGap: 2,
+        },
+      ],
+      series,
+      cursor: {
+        drag: { setScale: false },
+        points: { show: false },
+      },
+      select: { show: false, left: 0, top: 0, width: 0, height: 0 },
+      legend: { show: false },
+      plugins: [
+        bgPlugin(),
+        peakMarkersPlugin(peaksRef),
+        wheelZoomPlugin(fullRangeRef),
+        clickPlugin(peaksRef, onPeakClickRef),
+      ],
+    };
+
+    const empty: uPlot.AlignedData = mode === 'live'
+      ? [[], [], []]
+      : [[], []];
+
+    chartRef.current = new uPlot(opts, empty, containerRef.current);
+
+    return () => {
+      chartRef.current?.destroy();
+      chartRef.current = null;
+    };
+  }, [mode, width, chartH]);
+
+  // Push data on each frame
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !frame || !frame.freqs_mhz.length) return;
+
+    const { freqs_mhz, power_db, peaks } = frame;
+    peaksRef.current = peaks;
+
+    fullRangeRef.current = {
+      xMin: freqs_mhz[0],
+      xMax: freqs_mhz[freqs_mhz.length - 1],
+    };
+
+    const rangeKey = `${freqs_mhz[0]}:${freqs_mhz[freqs_mhz.length - 1]}`;
+    const rangeChanged = prevRangeRef.current !== rangeKey;
+    prevRangeRef.current = rangeKey;
+
+    if (mode === 'live') {
+      if (!maxHoldRef.current || maxHoldRef.current.length !== power_db.length) {
+        maxHoldRef.current = [...power_db];
       } else {
-        for (let i = 0; i < power.length; i++) {
-          if (power[i] > maxHoldRef.current[i]) {
-            maxHoldRef.current[i] = power[i];
+        for (let i = 0; i < power_db.length; i++) {
+          if (power_db[i] > maxHoldRef.current[i]) {
+            maxHoldRef.current[i] = power_db[i];
           } else {
             maxHoldRef.current[i] -= 0.15;
           }
         }
       }
-      maxHold = maxHoldRef.current;
+      chart.setData(
+        [freqs_mhz, power_db, [...maxHoldRef.current]],
+        rangeChanged,
+      );
+    } else {
+      chart.setData([freqs_mhz, power_db], rangeChanged);
     }
+  }, [frame, mode]);
 
-    const fMin = freqs[0];
-    const fMax = freqs[freqs.length - 1];
+  // Reset max hold when freq range changes
+  useEffect(() => {
+    maxHoldRef.current = null;
+  }, [frame?.freqs_mhz?.[0], frame?.freqs_mhz?.[frame?.freqs_mhz?.length - 1]]);
 
-    let pMin = Infinity, pMax = -Infinity;
-    for (const v of power) {
-      if (v < pMin) pMin = v;
-      if (v > pMax) pMax = v;
-    }
-    if (maxHold) {
-      for (const v of maxHold) {
-        if (v > pMax) pMax = v;
-      }
-    }
-    pMin = Math.floor(pMin / 5) * 5 - 5;
-    pMax = Math.ceil(pMax / 5) * 5 + 5;
-
-    const ml = 55, mr = 15, mt = 30, mb = 35;
-    const pw = width - ml - mr;
-    const ph = height - mt - mb;
-
-    const toX = (f: number) => ml + (f - fMin) / (fMax - fMin) * pw;
-    const toY = (p: number) => mt + (1 - (p - pMin) / (pMax - pMin)) * ph;
-
-    ctx.fillStyle = BG;
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = '#0f1525';
-    ctx.fillRect(ml, mt, pw, ph);
-
-    drawGrid(ctx, toX, toY, fMin, fMax, pMin, pMax, ml, mt, pw, ph);
-    if (maxHold) drawTrace(ctx, toX, toY, freqs, maxHold, 'rgba(255,100,50,0.25)', 1);
-    drawSpectrum(ctx, toX, toY, freqs, power, pMin);
-    drawPeakMarkers(ctx, toX, toY, peaks);
-    drawTitle(ctx, ml, mt, pw, width, height, fMin, fMax, peaks, mode);
-  }, [frame, mode, width, height]);
-
-  useEffect(() => { draw(); }, [draw]);
-
-  useEffect(() => { maxHoldRef.current = null; },
-    [frame?.freqs_mhz?.[0], frame?.freqs_mhz?.[frame?.freqs_mhz?.length - 1]]);
+  const fMin = frame?.freqs_mhz?.[0];
+  const fMax = frame?.freqs_mhz?.[frame?.freqs_mhz?.length - 1];
+  const peakCount = frame?.peaks?.length ?? 0;
 
   return (
-    <canvas
-      ref={canvasRef}
-      style={{ width, height }}
-      className="rounded-lg"
-    />
+    <div style={{ width, height }}>
+      <div className="flex items-center justify-center gap-2" style={{ height: TITLE_H }}>
+        {mode === 'live' && (
+          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+        )}
+        <span className="text-sm font-bold text-gray-200">
+          {mode === 'live' ? 'LIVE' : 'SCAN'}
+          {fMin != null && fMax != null && ` — ${fMin.toFixed(1)}–${fMax.toFixed(1)} MHz`}
+        </span>
+        {peakCount > 0 && (
+          <span className="text-xs text-gray-500">
+            ({peakCount} signal{peakCount !== 1 ? 's' : ''})
+          </span>
+        )}
+        <span className="text-[10px] text-gray-600 ml-2">scroll to zoom · double-click to reset</span>
+      </div>
+      <div ref={containerRef} className="rounded-lg overflow-hidden" />
+    </div>
   );
 }
