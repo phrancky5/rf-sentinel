@@ -96,9 +96,17 @@ function peakMarkersPlugin(
 function vfoPlugin(
   vfoRef: React.MutableRefObject<number | null>,
   cbRef: React.MutableRefObject<((freq_mhz: number) => void) | undefined>,
+  xStartRef: React.MutableRefObject<number>,
+  xEndRef: React.MutableRefObject<number>,
+  dataXMinRef: React.MutableRefObject<number>,
+  dataXMaxRef: React.MutableRefObject<number>,
+  setXStart: (v: number) => void,
+  setXEnd: (v: number) => void,
 ): uPlot.Plugin {
   const HIT_PX = 8;
-  let dragging = false;
+  const DRAG_THRESHOLD = 4;
+  let dragging: 'vfo' | 'pan' | false = false;
+  let suppressClick = false;
 
   return {
     hooks: {
@@ -149,23 +157,57 @@ function vfoPlugin(
         });
 
         over.addEventListener('mousedown', (e: MouseEvent) => {
-          if (!cbRef.current) return;
           const rect = over.getBoundingClientRect();
           const cx = e.clientX - rect.left;
-
-          if (!nearVfo(cx)) return;
-
           e.preventDefault();
-          dragging = true;
-          over.style.cursor = 'ew-resize';
+          suppressClick = false;
+
+          if (nearVfo(cx) && cbRef.current) {
+            dragging = 'vfo';
+            over.style.cursor = 'ew-resize';
+            const onMove = (ev: MouseEvent) => {
+              const mx = ev.clientX - rect.left;
+              cbRef.current?.(u.posToVal(mx, 'x'));
+            };
+            const onUp = () => {
+              dragging = false;
+              suppressClick = true;
+              document.removeEventListener('mousemove', onMove);
+              document.removeEventListener('mouseup', onUp);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+            return;
+          }
+
+          const startX = e.clientX;
+          const startLo = xStartRef.current;
+          const startHi = xEndRef.current;
+          let moved = false;
 
           const onMove = (ev: MouseEvent) => {
-            const mx = ev.clientX - rect.left;
-            const freq = u.posToVal(mx, 'x');
-            cbRef.current?.(freq);
+            const dx = ev.clientX - startX;
+            if (!moved && Math.abs(dx) < DRAG_THRESHOLD) return;
+            if (!moved) {
+              moved = true;
+              dragging = 'pan';
+              over.style.cursor = 'grabbing';
+            }
+            const freqPerPx = (startHi - startLo) / over.clientWidth;
+            const dFreq = -dx * freqPerPx;
+            let nLo = startLo + dFreq;
+            let nHi = startHi + dFreq;
+            const dMin = dataXMinRef.current;
+            const dMax = dataXMaxRef.current;
+            if (nLo < dMin) { nHi += dMin - nLo; nLo = dMin; }
+            if (nHi > dMax) { nLo -= nHi - dMax; nHi = dMax; }
+            setXStart(nLo);
+            setXEnd(nHi);
           };
           const onUp = () => {
+            if (moved) suppressClick = true;
             dragging = false;
+            over.style.cursor = 'crosshair';
             document.removeEventListener('mousemove', onMove);
             document.removeEventListener('mouseup', onUp);
           };
@@ -174,7 +216,7 @@ function vfoPlugin(
         });
 
         over.addEventListener('click', (e: MouseEvent) => {
-          if (!cbRef.current || dragging) return;
+          if (!cbRef.current || suppressClick) { suppressClick = false; return; }
           const rect = over.getBoundingClientRect();
           const cx = e.clientX - rect.left;
           if (nearVfo(cx)) return;
@@ -291,6 +333,12 @@ function DualRangeSlider({ lo, hi, min, max, onChange, onReset, vertical, snapSt
         <span className="text-[9px] text-gray-500 font-mono">{hi.toFixed(precision)}</span>
         <div ref={trackRef} className="relative w-3 flex-1 flex justify-center" onDoubleClick={onReset}>
           <div className="absolute inset-y-0 w-1 rounded-full bg-gray-700" />
+          {markers?.map((m, i) => {
+            const pct = (1 - valToFrac(m.pos)) * 100;
+            if (pct < 0 || pct > 100) return null;
+            return <div key={i} className="absolute left-0 right-0 pointer-events-none"
+              style={{ top: `${pct}%`, height: 2, backgroundColor: m.color }} />;
+          })}
           <div
             className="absolute w-1 rounded-full bg-cyan-600/50 cursor-grab active:cursor-grabbing"
             style={{ top: `${hiTop}%`, bottom: `${100 - loTop}%` }}
@@ -356,6 +404,8 @@ export default function SpectrumChart({
   const [xStart, setXStart, xStartRef] = useStateRef(24);
   const [xEnd, setXEnd, xEndRef] = useStateRef(1766);
   const prevDataRange = useRef('');
+  const dbHistoryRef = useRef<{ min: number; max: number; t: number }[]>([]);
+  const [dbRange, setDbRange] = useState<{ min: number; max: number } | null>(null);
   const [plotPad, setPlotPad] = useState({ left: 0, right: 0 });
   const syncPlotPad = useCallback(() => {
     const c = chartRef.current;
@@ -456,7 +506,7 @@ export default function SpectrumChart({
       plugins: [
         bgPlugin(),
         peakMarkersPlugin(peaksRef),
-        vfoPlugin(vfoRef, onFreqClickRef),
+        vfoPlugin(vfoRef, onFreqClickRef, xStartRef, xEndRef, dataXMinRef, dataXMaxRef, setXStart, setXEnd),
         wheelZoomPlugin(xStartRef, xEndRef, dataXMinRef, dataXMaxRef, setXStart, setXEnd),
       ],
     };
@@ -482,6 +532,27 @@ export default function SpectrumChart({
     const { freqs_mhz, power_db, peaks } = frame;
     peaksRef.current = peaks;
 
+    let fMin = Infinity, fMax = -Infinity;
+    for (let i = 0; i < power_db.length; i++) {
+      if (power_db[i] < fMin) fMin = power_db[i];
+      if (power_db[i] > fMax) fMax = power_db[i];
+    }
+    {
+      const now = Date.now();
+      const hist = dbHistoryRef.current;
+      hist.push({ min: fMin, max: fMax, t: now });
+      const cutoff = now - 30_000;
+      while (hist.length > 0 && hist[0].t < cutoff) hist.shift();
+      let wMin = Infinity, wMax = -Infinity;
+      for (const h of hist) {
+        if (h.min < wMin) wMin = h.min;
+        if (h.max > wMax) wMax = h.max;
+      }
+      setDbRange(prev =>
+        prev && prev.min === wMin && prev.max === wMax ? prev : { min: wMin, max: wMax },
+      );
+    }
+
     const rangeKey = `${freqs_mhz[0]}:${freqs_mhz[freqs_mhz.length - 1]}`;
     if (rangeKey !== prevDataRange.current) {
       prevDataRange.current = rangeKey;
@@ -491,6 +562,10 @@ export default function SpectrumChart({
       setXEnd(freqs_mhz[freqs_mhz.length - 1]);
       xStartRef.current = freqs_mhz[0];
       xEndRef.current = freqs_mhz[freqs_mhz.length - 1];
+      const pad = mode === 'live' ? 10 : 5;
+      setYLo(Math.floor(fMin - pad));
+      setYHi(Math.ceil(fMax + pad));
+      dbHistoryRef.current = [];
     }
 
     let data: uPlot.AlignedData;
@@ -549,6 +624,12 @@ export default function SpectrumChart({
     xSliderMarkers.push({ pos: vfoFreq, color: VFO_COLOR });
   }
 
+  const ySliderMarkers: SliderMarker[] = [];
+  if (dbRange) {
+    ySliderMarkers.push({ pos: dbRange.min, color: PEAK });
+    ySliderMarkers.push({ pos: dbRange.max, color: PEAK });
+  }
+
   return (
     <div ref={wrapRef} className="w-full h-full flex flex-col">
       <div className="flex items-center px-3 flex-shrink-0" style={{ height: TITLE_H }}>
@@ -579,7 +660,7 @@ export default function SpectrumChart({
         </div>
         <div className="flex-shrink-0" style={{ width: YZOOM_W }}>
           <DualRangeSlider lo={yLo} hi={yHi} min={-150} max={0} vertical
-            snapStep={1} precision={0}
+            snapStep={1} precision={0} markers={ySliderMarkers}
             onChange={(lo, hi) => { setYLo(lo); setYHi(hi); }}
             onReset={() => { setYLo(-150); setYHi(0); }} />
         </div>
