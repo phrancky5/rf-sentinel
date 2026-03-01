@@ -5,7 +5,7 @@ interface Props {
   onChange: (mode: Mode) => void;
 }
 
-const MODES: Mode[] = ['scan', 'live'];
+const MODES: Mode[] = ['live', 'scan'];
 
 const modeBtn = 'flex-1 py-1.5 text-xs font-medium rounded-md transition-all capitalize';
 const modeBtnActive = 'bg-cyan-500/20 text-cyan-300 shadow-sm';

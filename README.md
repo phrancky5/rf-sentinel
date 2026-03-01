@@ -30,26 +30,19 @@ npm run dev
 
 ## Features
 
-### Scan
-
-Single-shot power spectral density capture across a frequency range. Uses Welch's method to compute power (dB) vs frequency (MHz). Results render as an interactive chart with peak detection markers and configurable x/y axis ranges.
-
-### Waterfall
-
-Spectrogram capture showing frequency vs time vs power. Produces a heatmap image where the x-axis is frequency, y-axis is time, and color intensity represents signal power. Useful for spotting intermittent or hopping signals.
-
 ### Live Mode
 
-Continuous real-time spectrum display. The SDR streams I/Q samples and the frontend renders a live-updating power spectrum with:
+Continuous real-time spectrum display. The SDR streams I/Q samples and the frontend renders a live-updating power spectrum with a scrolling waterfall spectrogram below:
 - Max-hold trace (decaying peak envelope)
 - Click-to-tune VFO marker with draggable repositioning
 - Drag-to-pan and scroll-to-zoom on the frequency axis
 - Dual-thumb range sliders for both axes
 - dB range markers showing min/max power over a 30-second sliding window
+- FM audio demodulation via click-to-tune, streamed as PCM over WebSocket
 
-### Audio Demodulation
+### Scan
 
-When live mode is active, click a frequency to tune the VFO and enable audio output. Supports FM demodulation streamed over a dedicated WebSocket as PCM audio, played back in the browser via the Web Audio API with adjustable volume.
+Captures a spectrum + waterfall over a frequency range, stitching multiple chunks for wide sweeps. Results render as an interactive spectrum chart (mean PSD with peak detection) above a waterfall spectrogram with a contrast slider. Both charts share a synchronized frequency axis with zoom and pan.
 
 ## License
 
