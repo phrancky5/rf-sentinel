@@ -11,8 +11,6 @@ import SpectrumChart, { SpectrumFrame } from './components/SpectrumChart';
 const WS_URL = `ws://${window.location.hostname}:8900/api/ws`;
 const AUDIO_WS_URL = `ws://${window.location.hostname}:8900/api/ws/audio`;
 
-const statusDot = 'w-2 h-2 rounded-full';
-
 // ── Local components ─────────────────────────────────────
 
 function Header({ liveActive, audioEnabled, serverOnline }: {
@@ -38,7 +36,7 @@ function Header({ liveActive, audioEnabled, serverOnline }: {
           </span>
         )}
         <div className="flex items-center gap-1.5">
-          <span className={`${statusDot} ${serverOnline ? 'bg-green-400' : 'bg-red-400'}`} />
+          <span className={`w-2 h-2 rounded-full ${serverOnline ? 'bg-green-400' : 'bg-red-400'}`} />
           <span className="text-xs text-gray-500">
             {serverOnline ? 'Server online' : 'Disconnected'}
           </span>
@@ -139,18 +137,17 @@ export default function App() {
         power_db: lastMessage.power_db,
         peaks: lastMessage.peaks,
       });
+      const center = (freqs[0] + freqs[freqs.length - 1]) / 2;
       setVfoFreq(prev => {
         if (prev != null) {
           if (prev < freqs[0] || prev > freqs[freqs.length - 1]) {
             setAudioEnabled(false);
             audio.stop();
-            const center = (freqs[0] + freqs[freqs.length - 1]) / 2;
             setVfo(center).catch(() => {});
             return center;
           }
           return prev;
         }
-        const center = (freqs[0] + freqs[freqs.length - 1]) / 2;
         setVfo(center).catch(() => {});
         return center;
       });
