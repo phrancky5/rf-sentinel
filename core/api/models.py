@@ -42,6 +42,13 @@ class LiveRequest(BaseModel):
     demod_mode: DemodMode = Field(DemodMode.FM, description="Demodulation mode: fm or am")
 
 
+class RetuneRequest(BaseModel):
+    """Retune live stream without restart."""
+    start_mhz: float = Field(97.0, ge=24.0, le=1766.0)
+    stop_mhz: float = Field(99.0, ge=24.0, le=1766.0)
+    gain: float = Field(30.0, ge=0.0, le=50.0)
+
+
 class AudioToggleRequest(BaseModel):
     """Toggle audio demod while live is running."""
     enabled: bool = Field(..., description="Enable or disable audio")

@@ -1,5 +1,20 @@
 const API = '';
 
+async function post(url: string, body?: object): Promise<Response> {
+  const res = await fetch(`${API}${url}`, {
+    method: 'POST',
+    ...(body && {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res;
+}
+
 export interface JobResponse {
   job_id: string;
   status: string;
@@ -17,64 +32,39 @@ export interface JobInfo {
 }
 
 export async function startScan(params: {
-  start_mhz: number;
-  stop_mhz: number;
-  duration: number;
-  gain: number;
+  start_mhz: number; stop_mhz: number; duration: number; gain: number;
 }): Promise<JobResponse> {
-  const res = await fetch(`${API}/api/scan`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  });
-  return res.json();
+  return (await post('/api/scan', params)).json();
 }
 
 export async function startWaterfall(params: {
-  start_mhz: number;
-  stop_mhz: number;
-  duration: number;
-  gain: number;
+  start_mhz: number; stop_mhz: number; duration: number; gain: number;
 }): Promise<JobResponse> {
-  const res = await fetch(`${API}/api/waterfall`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  });
-  return res.json();
+  return (await post('/api/waterfall', params)).json();
 }
 
 // ── Live mode ──────────────────────────────────────────
 
 export async function startLive(params: {
-  start_mhz: number;
-  stop_mhz: number;
-  gain: number;
-  audio_enabled?: boolean;
-  demod_mode?: string;
+  start_mhz: number; stop_mhz: number; gain: number;
+  audio_enabled?: boolean; demod_mode?: string;
 }): Promise<{ status: string; start_mhz: number; stop_mhz: number }> {
-  const res = await fetch(`${API}/api/live/start`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  });
-  return res.json();
+  return (await post('/api/live/start', params)).json();
+}
+
+export async function retuneLive(params: {
+  start_mhz: number; stop_mhz: number; gain: number;
+}): Promise<{ status: string }> {
+  return (await post('/api/live/retune', params)).json();
 }
 
 export async function stopLive(): Promise<{ status: string }> {
-  const res = await fetch(`${API}/api/live/stop`, { method: 'POST' });
-  return res.json();
+  return (await post('/api/live/stop')).json();
 }
 
 export async function toggleAudio(params: {
-  enabled: boolean;
-  demod_mode: string;
+  enabled: boolean; demod_mode: string;
 }): Promise<{ audio_enabled: boolean; demod_mode: string }> {
-  const res = await fetch(`${API}/api/live/audio`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  });
-  return res.json();
+  return (await post('/api/live/audio', params)).json();
 }
 

@@ -94,7 +94,8 @@ class JobRunner:
         self._pool = ThreadPoolExecutor(max_workers=1)
         self._live_active = False
         self._live_thread = None
-        self._live_sdr: object | None = None
+        self._live_sdr: "SDRDevice | None" = None
+        self._live_config = None
         self._audio_enabled = False
         self._demod_mode = DemodMode.FM
         self._demod_state = None
@@ -258,22 +259,25 @@ class JobRunner:
 
     # ── Live mode ────────────────────────────────────────
 
+    @staticmethod
+    def _live_params(start_mhz: float, stop_mhz: float) -> tuple[float, float, float, float]:
+        """Compute center_hz, sample_rate, clamped start/stop for live mode."""
+        from core.dsp import SAMPLE_RATE
+        MAX_BW = SAMPLE_RATE / 1e6
+        if stop_mhz - start_mhz > MAX_BW:
+            stop_mhz = start_mhz + MAX_BW
+        center_hz = (start_mhz + stop_mhz) / 2 * 1e6
+        bw_hz = (stop_mhz - start_mhz) * 1e6
+        sample_rate = min(max(bw_hz, 0.25e6), SAMPLE_RATE)
+        return center_hz, sample_rate, start_mhz, stop_mhz
+
     def start_live(self, start_mhz: float, stop_mhz: float, gain: float,
                     audio_enabled: bool = False, demod_mode: DemodMode = DemodMode.FM) -> None:
         """Start continuous spectrum capture with optional audio demod."""
         if self._live_active:
             self.stop_live()
 
-        from core.dsp import SAMPLE_RATE
-        MAX_BW = SAMPLE_RATE / 1e6
-
-        bw = stop_mhz - start_mhz
-        if bw > MAX_BW:
-            stop_mhz = start_mhz + MAX_BW
-
-        center_hz = (start_mhz + stop_mhz) / 2 * 1e6
-        bw_hz = (stop_mhz - start_mhz) * 1e6
-        sample_rate = min(max(bw_hz, 0.25e6), SAMPLE_RATE)
+        center_hz, sample_rate, start_mhz, stop_mhz = self._live_params(start_mhz, stop_mhz)
 
         self._audio_enabled = audio_enabled
         self._demod_mode = demod_mode
@@ -301,8 +305,36 @@ class JobRunner:
             self._live_thread.join(timeout=3)
             self._live_thread = None
         self._live_sdr = None
+        self._live_config = None
         logger.info("live stopped")
         _emit("live", "Live stopped")
+
+    def retune_live(self, start_mhz: float, stop_mhz: float, gain: float) -> None:
+        """Retune the live stream in-place — no stream interruption.
+
+        Sets center_freq and gain via USB control transfers (I2C) which
+        don't conflict with the bulk sample transfers already running.
+        """
+        if not self._live_active or not self._live_sdr:
+            return
+
+        from core.sdr import CaptureConfig
+
+        center_hz, sample_rate, start_mhz, stop_mhz = self._live_params(start_mhz, stop_mhz)
+
+        if self._live_config and sample_rate != self._live_config.sample_rate:
+            _emit("live", "Sample rate changed — restarting stream")
+            self.stop_live()
+            self.start_live(start_mhz, stop_mhz, gain, self._audio_enabled, self._demod_mode)
+            return
+
+        self._live_sdr.retune(center_hz, gain)
+        self._live_config = CaptureConfig(
+            center_freq=center_hz, sample_rate=sample_rate,
+            gain=gain, duration=0,
+        )
+        self._demod_state = None
+        _emit("live", f"Retune → {start_mhz:.1f}–{stop_mhz:.1f} MHz, gain={gain:.0f} dB")
 
     def toggle_audio(self, enabled: bool, demod_mode: DemodMode = DemodMode.FM) -> None:
         """Toggle audio demod on/off while live is running."""
@@ -376,47 +408,43 @@ class JobRunner:
                    gain: float, start_mhz: float, stop_mhz: float) -> None:
         """Continuous streaming loop using async USB reads.
 
-        Uses rtlsdr_read_async for gapless sample delivery — no USB
-        re-trigger overhead between frames.
+        Uses rtlsdr_read_async for gapless sample delivery.
+        Retune happens in-place via SDR property setters (USB control
+        transfers) without interrupting the bulk sample stream.
         """
         from core.sdr import SDRDevice, CaptureConfig, CaptureResult
 
-        CHUNK_SAMPLES = int(sample_rate * 0.1)  # 100ms per callback
         SPECTRUM_EVERY = 5
-
-        logger.info("live loop starting: fc=%.3f MHz sr=%.0f Hz gain=%.0f dB chunk=%d samples",
-                     center_hz / 1e6, sample_rate, gain, CHUNK_SAMPLES)
-
         frame_count = 0
-        try:
-            config = CaptureConfig(
-                center_freq=center_hz,
-                sample_rate=sample_rate,
-                gain=gain,
-                duration=0,
-            )
 
+        try:
             with SDRDevice() as sdr:
                 self._live_sdr = sdr
-                sdr.configure(config)
-                logger.info("live loop: SDR device opened (streaming)")
+                self._live_config = CaptureConfig(
+                    center_freq=center_hz, sample_rate=sample_rate,
+                    gain=gain, duration=0,
+                )
+                sdr.configure(self._live_config)
+                chunk_samples = int(sample_rate * 0.1)
+                logger.info("live streaming: fc=%.3f MHz sr=%.0f Hz gain=%.0f dB",
+                            center_hz / 1e6, sample_rate, gain)
 
                 def on_chunk(iq):
                     nonlocal frame_count
                     if not self._live_active:
                         sdr.stop_stream()
                         return
-
+                    cfg = self._live_config
                     capture = CaptureResult(
-                        samples=iq, config=config,
-                        actual_duration=len(iq) / sample_rate,
+                        samples=iq, config=cfg,
+                        actual_duration=len(iq) / cfg.sample_rate,
                         num_samples=len(iq),
                     )
                     send_spectrum = (frame_count % SPECTRUM_EVERY == 0)
-                    self._process_live_frame(capture, sample_rate, frame_count, send_spectrum)
+                    self._process_live_frame(capture, cfg.sample_rate, frame_count, send_spectrum)
                     frame_count += 1
 
-                sdr.start_stream(on_chunk, CHUNK_SAMPLES)
+                sdr.start_stream(on_chunk, chunk_samples)
 
         except Exception as e:
             _emit("live", f"Live error: {e}")
@@ -425,5 +453,6 @@ class JobRunner:
             self._live_active = False
             self._audio_enabled = False
             self._live_sdr = None
+            self._live_config = None
             logger.info("live loop exited after %d frames", frame_count)
 

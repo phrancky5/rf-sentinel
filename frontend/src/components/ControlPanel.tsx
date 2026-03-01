@@ -1,5 +1,5 @@
-import { useState, useCallback } from 'react';
-import { startScan, startWaterfall, startLive, stopLive, toggleAudio } from '../api';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { startScan, startWaterfall, startLive, retuneLive, stopLive, toggleAudio } from '../api';
 import ModeSelector, { Mode } from './ModeSelector';
 import PresetBar from './PresetBar';
 import ParamSlider from './ParamSlider';
@@ -41,15 +41,15 @@ function ScanInfo({ bandwidth, numChunks, duration }: { bandwidth: number; numCh
   );
 }
 
-function AudioControls({ liveActive, audioEnabled, onToggle, volume, onVolumeChange }: {
+function AudioControls({ liveActive, audioEnabled, onToggle, demodMode, onDemodModeChange, volume, onVolumeChange }: {
   liveActive: boolean;
   audioEnabled: boolean;
   onToggle: (enabled: boolean) => void;
+  demodMode: DemodMode;
+  onDemodModeChange: (mode: DemodMode) => void;
   volume: number;
   onVolumeChange: (v: number) => void;
 }) {
-  const [demodMode, setDemodMode] = useState<DemodMode>('fm');
-
   const handleToggle = async () => {
     const next = !audioEnabled;
     try {
@@ -61,7 +61,7 @@ function AudioControls({ liveActive, audioEnabled, onToggle, volume, onVolumeCha
   };
 
   const handleModeChange = async (mode: DemodMode) => {
-    setDemodMode(mode);
+    onDemodModeChange(mode);
     if (audioEnabled) {
       try {
         await toggleAudio({ enabled: true, demod_mode: mode });
@@ -129,6 +129,36 @@ export default function ControlPanel({ liveActive, onLiveToggle, audioEnabled, o
   const [gain, setGain] = useState(30.0);
   const [loading, setLoading] = useState(false);
   const [volume, setVolume] = useState(50);
+  const [demodMode, setDemodMode] = useState<DemodMode>('fm');
+  const lastLiveParams = useRef('');
+
+  // Debounced retune: restart live stream when freq/gain change
+  useEffect(() => {
+    if (!liveActive) {
+      lastLiveParams.current = '';
+      return;
+    }
+    const key = `${centerMhz}:${gain}`;
+    if (!lastLiveParams.current) {
+      lastLiveParams.current = key;
+      return;
+    }
+    if (lastLiveParams.current === key) return;
+    lastLiveParams.current = key;
+
+    const timer = setTimeout(async () => {
+      try {
+        await retuneLive({
+          start_mhz: +(centerMhz - 1.0).toFixed(1),
+          stop_mhz: +(centerMhz + 1.0).toFixed(1),
+          gain,
+        });
+      } catch (e) {
+        console.error('Failed to retune:', e);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [centerMhz, gain, liveActive]);
 
   const bandwidth = stopMhz - startMhz;
   const invalid = mode !== 'live' && stopMhz <= startMhz;
@@ -159,8 +189,12 @@ export default function ControlPanel({ liveActive, onLiveToggle, audioEnabled, o
             start_mhz: +(centerMhz - 1.0).toFixed(1),
             stop_mhz: +(centerMhz + 1.0).toFixed(1),
             gain,
+            audio_enabled: true,
+            demod_mode: demodMode,
           });
           onLiveToggle(true);
+          await toggleAudio({ enabled: true, demod_mode: demodMode });
+          onAudioToggle(true);
         } catch (e) {
           console.error('Failed to start live:', e);
         } finally {
@@ -266,6 +300,8 @@ export default function ControlPanel({ liveActive, onLiveToggle, audioEnabled, o
         liveActive={liveActive}
         audioEnabled={audioEnabled}
         onToggle={onAudioToggle}
+        demodMode={demodMode}
+        onDemodModeChange={setDemodMode}
         volume={volume}
         onVolumeChange={handleVolumeChange}
       />

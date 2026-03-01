@@ -159,6 +159,19 @@ class SDRDevice:
             raise RuntimeError("Device not open. Use 'with SDRDevice() as sdr:'")
         self._sdr.read_samples_async(lambda iq, ctx: callback(iq), num_samples)
 
+    def retune(self, center_freq: float, gain: float) -> None:
+        """Change center freq and gain while streaming. Thread-safe.
+
+        Uses USB control transfers (I2C) which don't conflict with the
+        bulk sample transfers running in read_samples_async.
+        """
+        if self._sdr is None:
+            raise RuntimeError("Device not open")
+        self._sdr.center_freq = center_freq
+        self._sdr.gain = gain
+        if self._last_config_key:
+            self._last_config_key = (self._last_config_key[0], center_freq, gain)
+
     def stop_stream(self) -> None:
         """Cancel async reading, unblocking start_stream(). Thread-safe."""
         if self._sdr is not None:

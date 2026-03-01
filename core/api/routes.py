@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from core.api.models import ScanRequest, WaterfallRequest, LiveRequest, AudioToggleRequest
+from core.api.models import ScanRequest, WaterfallRequest, LiveRequest, RetuneRequest, AudioToggleRequest
 from core.api.runner import JobRunner
 
 
@@ -37,6 +37,13 @@ def create_routes(runner: JobRunner) -> APIRouter:
     async def stop_live():
         runner.stop_live()
         return {"status": "stopped"}
+
+    @router.post("/api/live/retune")
+    async def retune_live(req: RetuneRequest):
+        if not runner.live_active:
+            return JSONResponse({"error": "Live mode is not active"}, status_code=400)
+        runner.retune_live(req.start_mhz, req.stop_mhz, req.gain)
+        return {"status": "retuned", "start_mhz": req.start_mhz, "stop_mhz": req.stop_mhz}
 
     @router.post("/api/live/audio")
     async def toggle_audio(req: AudioToggleRequest):

@@ -52,6 +52,13 @@ async def _startup() -> None:
     logger.info("RFSentinel server started (audio support enabled)")
 
 
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    runner.stop_live()
+    runner._pool.shutdown(wait=False)
+    logger.info("RFSentinel server stopped")
+
+
 # ── Entry point ─────────────────────────────────────────
 
 def run_server(host: str = "127.0.0.1", port: int = 8900) -> None:
