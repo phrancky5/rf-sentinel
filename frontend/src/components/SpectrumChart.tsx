@@ -84,80 +84,6 @@ function peakMarkersPlugin(
   };
 }
 
-function wheelZoomPlugin(
-  fullRangeRef: React.MutableRefObject<{ xMin: number; xMax: number } | null>,
-  factor = 0.75,
-): uPlot.Plugin {
-  return {
-    hooks: {
-      ready: (u: uPlot) => {
-        const over = u.over;
-
-        over.addEventListener('wheel', (e: WheelEvent) => {
-          e.preventDefault();
-          const fr = fullRangeRef.current;
-          if (!fr) return;
-          const { left } = u.cursor;
-          if (left == null) return;
-
-          const rect = over.getBoundingClientRect();
-          const leftPct = left / rect.width;
-          const oxRange = u.scales.x.max! - u.scales.x.min!;
-          const nxRange = e.deltaY < 0 ? oxRange * factor : oxRange / factor;
-          const xVal = u.posToVal(left, 'x');
-
-          let nxMin = xVal - leftPct * nxRange;
-          let nxMax = nxMin + nxRange;
-
-          const fullW = fr.xMax - fr.xMin;
-          if (nxRange > fullW) { nxMin = fr.xMin; nxMax = fr.xMax; }
-          else if (nxMin < fr.xMin) { nxMin = fr.xMin; nxMax = fr.xMin + nxRange; }
-          else if (nxMax > fr.xMax) { nxMax = fr.xMax; nxMin = fr.xMax - nxRange; }
-
-          u.setScale('x', { min: nxMin, max: nxMax });
-        });
-
-        over.addEventListener('mousedown', (e: MouseEvent) => {
-          if (e.button !== 0) return;
-          const fr = fullRangeRef.current;
-          if (!fr) return;
-          const fullW = fr.xMax - fr.xMin;
-          const curW = u.scales.x.max! - u.scales.x.min!;
-          if (curW >= fullW * 0.99) return; // not zoomed, skip drag
-
-          e.preventDefault();
-          over.style.cursor = 'grabbing';
-          const xUnitsPerPx = u.posToVal(1, 'x') - u.posToVal(0, 'x');
-          const startX = e.clientX;
-          const startMin = u.scales.x.min!;
-          const startMax = u.scales.x.max!;
-
-          const onMove = (e: MouseEvent) => {
-            const dx = xUnitsPerPx * (e.clientX - startX);
-            let nMin = startMin - dx;
-            let nMax = startMax - dx;
-            if (nMin < fr.xMin) { nMin = fr.xMin; nMax = fr.xMin + curW; }
-            if (nMax > fr.xMax) { nMax = fr.xMax; nMin = fr.xMax - curW; }
-            u.setScale('x', { min: nMin, max: nMax });
-          };
-          const onUp = () => {
-            over.style.cursor = 'crosshair';
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
-          };
-          document.addEventListener('mousemove', onMove);
-          document.addEventListener('mouseup', onUp);
-        });
-
-        over.addEventListener('dblclick', () => {
-          const fr = fullRangeRef.current;
-          if (fr) u.setScale('x', { min: fr.xMin, max: fr.xMax });
-        });
-      },
-    },
-  };
-}
-
 function clickPlugin(
   peaksRef: React.MutableRefObject<SpectrumFrame['peaks']>,
   cbRef: React.MutableRefObject<((freq_mhz: number) => void) | undefined>,
@@ -205,6 +131,28 @@ function clickPlugin(
   };
 }
 
+// ── Y-axis control ───────────────────────────────────────
+
+function YAxisControl({ label, value, onChange, min, max, step, unit }: {
+  label: string; value: number; onChange: (v: number) => void;
+  min: number; max: number; step: number; unit: string;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <span className="text-[10px] text-gray-500">{label}</span>
+      <input
+        type="range"
+        min={min} max={max} step={step} value={value}
+        onChange={e => onChange(Number(e.target.value))}
+        className="w-14 h-1 accent-cyan-500"
+      />
+      <span className="text-[10px] text-gray-400 font-mono w-12 text-right">
+        {value} {unit}
+      </span>
+    </div>
+  );
+}
+
 // ── Component ────────────────────────────────────────────
 
 const TITLE_H = 28;
@@ -217,10 +165,15 @@ export default function SpectrumChart({
   const chartRef = useRef<uPlot | null>(null);
   const peaksRef = useRef<SpectrumFrame['peaks']>([]);
   const maxHoldRef = useRef<number[] | null>(null);
-  const fullRangeRef = useRef<{ xMin: number; xMax: number } | null>(null);
   const onPeakClickRef = useRef(onPeakClick);
   onPeakClickRef.current = onPeakClick;
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 400, h: 300 });
+  const [yRange, setYRange] = useState(80);
+  const [yOffset, setYOffset] = useState(-30);
+  const yRangeRef = useRef(yRange);
+  const yOffsetRef = useRef(yOffset);
+  yRangeRef.current = yRange;
+  yOffsetRef.current = yOffset;
 
   // Measure container
   useEffect(() => {
@@ -311,7 +264,6 @@ export default function SpectrumChart({
       plugins: [
         bgPlugin(),
         peakMarkersPlugin(peaksRef),
-        wheelZoomPlugin(fullRangeRef),
         clickPlugin(peaksRef, onPeakClickRef),
       ],
     };
@@ -336,18 +288,6 @@ export default function SpectrumChart({
     const { freqs_mhz, power_db, peaks } = frame;
     peaksRef.current = peaks;
 
-    fullRangeRef.current = {
-      xMin: freqs_mhz[0],
-      xMax: freqs_mhz[freqs_mhz.length - 1],
-    };
-
-    // Capture zoom state before setData resets scales
-    const fr = fullRangeRef.current;
-    const xZoomMin = chart.scales.x.min;
-    const xZoomMax = chart.scales.x.max;
-    const isZoomed = fr && xZoomMin != null && xZoomMax != null
-      && (xZoomMax - xZoomMin) < (fr.xMax - fr.xMin) * 0.99;
-
     let data: uPlot.AlignedData;
     if (mode === 'live') {
       if (!maxHoldRef.current || maxHoldRef.current.length !== power_db.length) {
@@ -366,12 +306,12 @@ export default function SpectrumChart({
       data = [freqs_mhz, power_db];
     }
 
-    // Always reset scales (so y auto-ranges), then restore x zoom
     chart.batch(() => {
       chart.setData(data, true);
-      if (isZoomed) {
-        chart.setScale('x', { min: xZoomMin!, max: xZoomMax! });
-      }
+      chart.setScale('y', {
+        min: yOffsetRef.current - yRangeRef.current / 2,
+        max: yOffsetRef.current + yRangeRef.current / 2,
+      });
     });
   }, [frame, mode]);
 
@@ -380,26 +320,40 @@ export default function SpectrumChart({
     maxHoldRef.current = null;
   }, [frame?.freqs_mhz?.[0], frame?.freqs_mhz?.[frame?.freqs_mhz?.length - 1]]);
 
+  useEffect(() => {
+    chartRef.current?.setScale('y', {
+      min: yOffset - yRange / 2,
+      max: yOffset + yRange / 2,
+    });
+  }, [yRange, yOffset]);
+
   const fMin = frame?.freqs_mhz?.[0];
   const fMax = frame?.freqs_mhz?.[frame?.freqs_mhz?.length - 1];
   const peakCount = frame?.peaks?.length ?? 0;
 
   return (
     <div ref={wrapRef} className="w-full h-full flex flex-col">
-      <div className="flex items-center justify-center gap-2 flex-shrink-0" style={{ height: TITLE_H }}>
-        {mode === 'live' && (
-          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-        )}
-        <span className="text-sm font-bold text-gray-200">
-          {mode === 'live' ? 'LIVE' : 'SCAN'}
-          {fMin != null && fMax != null && ` — ${fMin.toFixed(1)}–${fMax.toFixed(1)} MHz`}
-        </span>
-        {peakCount > 0 && (
-          <span className="text-xs text-gray-500">
-            ({peakCount} signal{peakCount !== 1 ? 's' : ''})
+      <div className="flex items-center justify-between px-3 flex-shrink-0" style={{ height: TITLE_H }}>
+        <div className="flex items-center gap-2">
+          {mode === 'live' && (
+            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+          )}
+          <span className="text-sm font-bold text-gray-200">
+            {mode === 'live' ? 'LIVE' : 'SCAN'}
+            {fMin != null && fMax != null && ` — ${fMin.toFixed(1)}–${fMax.toFixed(1)} MHz`}
           </span>
-        )}
-        <span className="text-[10px] text-gray-600 ml-2">scroll to zoom · double-click to reset</span>
+          {peakCount > 0 && (
+            <span className="text-xs text-gray-500">
+              ({peakCount} signal{peakCount !== 1 ? 's' : ''})
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <YAxisControl label="Range" value={yRange} onChange={setYRange}
+            min={10} max={150} step={5} unit="dB" />
+          <YAxisControl label="Offset" value={yOffset} onChange={setYOffset}
+            min={-120} max={20} step={5} unit="dB" />
+        </div>
       </div>
       <div ref={chartContainerRef} className="flex-1 overflow-hidden rounded-lg" />
     </div>
