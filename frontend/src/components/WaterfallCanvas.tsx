@@ -100,28 +100,22 @@ export default function WaterfallCanvas({ frame, view }: Props) {
     }
     dbMinRef.current += 0.05 * (fMin - dbMinRef.current);
     dbMaxRef.current += 0.05 * (fMax - dbMaxRef.current);
-
-    const pv = viewRef.current;
     viewRef.current = view;
 
-    if (pv && (pv.xStart !== view.xStart || pv.xEnd !== view.xEnd || pv.padLeft !== view.padLeft || pv.padRight !== view.padRight)) {
-      lastDrawRef.current = now;
-      fullRedraw();
-    } else {
-      const m = getDataMetrics();
-      if (!m || m.devH <= 0) return;
-      const msPerPx = (TARGET_SECONDS * 1000) / m.devH;
-      const elapsed = lastDrawRef.current > 0 ? now - lastDrawRef.current : 0;
-      if (elapsed < msPerPx) { if (!lastDrawRef.current) lastDrawRef.current = now; return; }
-      const rowH = Math.min(m.devH, Math.max(1, Math.round(elapsed / msPerPx)));
-      lastDrawRef.current = now;
-      scrollAndDraw(frame.freqs_mhz, frame.power_db, view, rowH);
-    }
+    const m = getDataMetrics();
+    if (!m || m.devH <= 0) return;
+    const msPerPx = (TARGET_SECONDS * 1000) / m.devH;
+    const elapsed = lastDrawRef.current > 0 ? now - lastDrawRef.current : 0;
+    if (elapsed < msPerPx) { if (!lastDrawRef.current) lastDrawRef.current = now; return; }
+    const rowH = Math.min(m.devH, Math.max(1, Math.round(elapsed / msPerPx)));
+    lastDrawRef.current = now;
+    scrollAndDraw(frame.freqs_mhz, frame.power_db, view, rowH);
   }, [frame]);
 
   useEffect(() => {
     if (!view) return;
     viewRef.current = view;
+    lastDrawRef.current = Date.now();
     fullRedraw();
   }, [view?.xStart, view?.xEnd, view?.padLeft, view?.padRight]);
 

@@ -547,19 +547,17 @@ export default function SpectrumChart({
       if (power_db[i] < fMin) fMin = power_db[i];
       if (power_db[i] > fMax) fMax = power_db[i];
     }
-    {
-      const now = Date.now();
-      const hist = dbHistoryRef.current;
-      hist.push({ min: fMin, max: fMax, t: now });
-      const cutoff = now - 30_000;
-      while (hist.length > 0 && hist[0].t < cutoff) hist.shift();
-      let wMin = Infinity, wMax = -Infinity;
-      for (const h of hist) {
-        if (h.min < wMin) wMin = h.min;
-        if (h.max > wMax) wMax = h.max;
-      }
-      dbRangeRef.current = { min: Math.floor(wMin), max: Math.ceil(wMax) };
+    const now = Date.now();
+    const hist = dbHistoryRef.current;
+    hist.push({ min: fMin, max: fMax, t: now });
+    const cutoff = now - 30_000;
+    while (hist.length > 0 && hist[0].t < cutoff) hist.shift();
+    let wMin = Infinity, wMax = -Infinity;
+    for (const h of hist) {
+      if (h.min < wMin) wMin = h.min;
+      if (h.max > wMax) wMax = h.max;
     }
+    dbRangeRef.current = { min: Math.floor(wMin), max: Math.ceil(wMax) };
 
     const rangeKey = `${freqs_mhz[0]}:${freqs_mhz[freqs_mhz.length - 1]}`;
     if (rangeKey !== prevDataRange.current) {
