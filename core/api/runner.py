@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from core.api.models import JobStatus
 from core.dsp.types import DemodMode
-from core.plotting import render_waterfall_plot
+import numpy as np
 
 logger = logging.getLogger("rfsentinel.runner")
 
@@ -243,11 +243,16 @@ class JobRunner:
             peaks = find_peaks(result.freqs_mhz, result.mean_psd_db)
             self._log_peaks(job.id, peaks)
 
-            _emit(job.id, "Rendering waterfall plot...")
-            plot_path = PLOTS_DIR / f"waterfall_{job.id}.png"
-            render_waterfall_plot(result, p, plot_path, peaks)
+            freq_step = max(1, len(result.freqs_mhz) // 1024)
+            time_step = max(1, result.power_db.shape[1] // 256)
+            power_ds = result.power_db[::freq_step, ::time_step]
+            job.params["waterfall_data"] = {
+                "freqs_mhz": np.round(result.freqs_mhz[::freq_step], 4).tolist(),
+                "power_db": np.round(power_ds.T, 1).tolist(),
+                "duration_s": round(float(result.times[-1]), 2),
+            }
 
-            self._finalize_job(job, t0, plot_path, peaks)
+            self._finalize_job(job, t0, None, peaks)
             _emit(job.id, f"Waterfall complete ({job.duration_s}s)")
 
         except Exception as e:

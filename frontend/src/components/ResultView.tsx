@@ -1,5 +1,6 @@
 import { JobInfo } from '../api';
 import SpectrumChart from './SpectrumChart';
+import WaterfallCanvas from './WaterfallCanvas';
 
 interface Props {
   job: JobInfo | null;
@@ -86,14 +87,9 @@ function ScanResult({ job }: { job: JobInfo }) {
 }
 
 function WaterfallResult({ job }: { job: JobInfo }) {
-  if (!job.result_url) return <p className="text-gray-500 text-sm">No plot available</p>;
-  return (
-    <img
-      src={job.result_url}
-      alt="waterfall result"
-      className="max-w-full max-h-full object-contain rounded"
-    />
-  );
+  const wd = job.params.waterfall_data;
+  if (!wd) return <p className="text-gray-500 text-sm">No waterfall data available</p>;
+  return <WaterfallCanvas resultData={wd} />;
 }
 
 export default function ResultView({ job }: Props) {
@@ -104,7 +100,7 @@ export default function ResultView({ job }: Props) {
   return (
     <div className="flex flex-col h-full">
       <JobHeader job={job} />
-      <div className={`flex-1 min-h-0 ${job.type === 'scan' ? '' : 'overflow-auto p-2 flex items-center justify-center'}`}>
+      <div className="flex-1 min-h-0">
         {job.type === 'scan' ? <ScanResult job={job} /> : <WaterfallResult job={job} />}
       </div>
     </div>

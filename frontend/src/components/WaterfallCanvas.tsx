@@ -2,8 +2,9 @@ import { useRef, useEffect, useState } from 'react';
 import type { SpectrumFrame, ChartView } from './SpectrumChart';
 
 interface Props {
-  frame: SpectrumFrame | null;
-  view: ChartView | null;
+  frame?: SpectrumFrame | null;
+  view?: ChartView | null;
+  resultData?: { freqs_mhz: number[]; power_db: number[][]; duration_s?: number } | null;
 }
 
 const TARGET_SECONDS = 60;
@@ -39,7 +40,7 @@ interface Row {
   cacheKey: number;
 }
 
-export default function WaterfallCanvas({ frame, view }: Props) {
+export default function WaterfallCanvas({ frame, view, resultData }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: 400, h: 192 });
@@ -118,6 +119,90 @@ export default function WaterfallCanvas({ frame, view }: Props) {
     lastDrawRef.current = Date.now();
     fullRedraw();
   }, [view?.xStart, view?.xEnd, view?.padLeft, view?.padRight]);
+
+  useEffect(() => {
+    if (!resultData?.freqs_mhz.length || !resultData.power_db.length) return;
+    renderResult();
+  }, [resultData, size]);
+
+  function renderResult() {
+    if (!resultData?.freqs_mhz.length || !resultData.power_db.length) return;
+    const cvs = canvasRef.current;
+    if (!cvs) return;
+    const ctx = cvs.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const devW = cvs.width;
+    const devH = cvs.height;
+    if (devW <= 0 || devH <= 0) return;
+
+    const { freqs_mhz, power_db } = resultData;
+    const nRows = power_db.length;
+    const totalTime = resultData.duration_s || nRows * 0.05;
+    const xStart = freqs_mhz[0];
+    const xEnd = freqs_mhz[freqs_mhz.length - 1];
+
+    const padLeft = Math.round(50 * dpr);
+    const padRight = Math.round(10 * dpr);
+    const padTop = Math.round(5 * dpr);
+    const padBottom = Math.round(24 * dpr);
+    const dataW = devW - padLeft - padRight;
+    const dataH = devH - padTop - padBottom;
+    if (dataW <= 0 || dataH <= 0) return;
+
+    let dbMin = Infinity, dbMax = -Infinity;
+    for (const row of power_db) {
+      for (const v of row) {
+        if (v < dbMin) dbMin = v;
+        if (v > dbMax) dbMax = v;
+      }
+    }
+    dbMinRef.current = dbMin;
+    dbMaxRef.current = dbMax;
+
+    const wf = getWf(dataW, dataH);
+    wf.u32.fill(BG_U32);
+    const stride = dataW * 4;
+    for (let dy = 0; dy < dataH; dy++) {
+      const ri = Math.min(nRows - 1, Math.floor((dy / dataH) * nRows));
+      const strip = renderPixels(dataW, xStart, xEnd, freqs_mhz, power_db[ri]);
+      wf.imgData.data.set(strip, dy * stride);
+    }
+
+    ctx.fillStyle = '#0a0e1a';
+    ctx.fillRect(0, 0, devW, devH);
+    ctx.putImageData(wf.imgData, padLeft, padTop);
+
+    const fontSize = Math.round(10 * dpr);
+    ctx.font = `${fontSize}px monospace`;
+    ctx.fillStyle = '#6b7280';
+    ctx.strokeStyle = '#374151';
+    ctx.lineWidth = dpr;
+
+    const xTicks = niceTicks(xStart, xEnd, Math.max(2, Math.floor(dataW / (70 * dpr))));
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    for (const freq of xTicks.values) {
+      const x = padLeft + ((freq - xStart) / (xEnd - xStart)) * dataW;
+      ctx.beginPath();
+      ctx.moveTo(x, padTop + dataH);
+      ctx.lineTo(x, padTop + dataH + 3 * dpr);
+      ctx.stroke();
+      ctx.fillText(formatTick(freq, xTicks.step), x, padTop + dataH + 4 * dpr);
+    }
+
+    const yTicks = niceTicks(0, totalTime, Math.max(2, Math.floor(dataH / (35 * dpr))));
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (const t of yTicks.values) {
+      const y = padTop + (t / totalTime) * dataH;
+      ctx.beginPath();
+      ctx.moveTo(padLeft - 3 * dpr, y);
+      ctx.lineTo(padLeft, y);
+      ctx.stroke();
+      ctx.fillText(formatTick(t, yTicks.step) + 's', padLeft - 5 * dpr, y);
+    }
+  }
 
   function getDataMetrics() {
     const cvs = canvasRef.current;
@@ -240,6 +325,33 @@ export default function WaterfallCanvas({ frame, view }: Props) {
       <canvas ref={canvasRef} className="block" />
     </div>
   );
+}
+
+function niceTicks(min: number, max: number, maxTicks: number): { values: number[]; step: number } {
+  const range = max - min;
+  if (range <= 0 || maxTicks < 2) return { values: [], step: 1 };
+  const rawStep = range / maxTicks;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const norm = rawStep / mag;
+  let step: number;
+  if (norm <= 1.5) step = mag;
+  else if (norm <= 3.5) step = 2 * mag;
+  else if (norm <= 7.5) step = 5 * mag;
+  else step = 10 * mag;
+  const values: number[] = [];
+  let t = Math.ceil(min / step) * step;
+  t = Math.round(t * 1e10) / 1e10;
+  while (t <= max + step * 0.001) {
+    values.push(t);
+    t = Math.round((t + step) * 1e10) / 1e10;
+  }
+  return { values, step };
+}
+
+function formatTick(value: number, step: number): string {
+  if (step >= 1) return value.toFixed(0);
+  if (step >= 0.1) return value.toFixed(1);
+  return value.toFixed(2);
 }
 
 function interpPower(freqs: number[], power: number[], freq: number): number {
