@@ -6,6 +6,74 @@ import ParamSlider from './ParamSlider';
 
 export type DemodMode = 'fm' | 'am';
 
+const FREQ_STEPS = [1000, 100, 10, 1, 0.1];
+const arrowBtn = 'w-full flex justify-center text-xs leading-none text-gray-500 hover:text-cyan-300 transition-colors select-none cursor-pointer';
+const digitInput = 'w-[22px] text-center text-base font-mono text-cyan-300 bg-transparent outline-none caret-cyan-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
+
+function FreqInput({ label, value, onChange, min, max }: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  min: number;
+  max: number;
+}) {
+  const clamp = (v: number) => Math.min(max, Math.max(min, +v.toFixed(1)));
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const str = Math.floor(value).toString().padStart(4, '0');
+  const tenths = Math.round((value % 1) * 10);
+  const digits = [+str[0], +str[1], +str[2], +str[3], tenths];
+
+  const setDigit = (i: number, d: number) => {
+    const cur = [...digits];
+    cur[i] = d;
+    const v = cur[0] * 1000 + cur[1] * 100 + cur[2] * 10 + cur[3] + cur[4] * 0.1;
+    onChange(clamp(v));
+    if (i < 4) inputRefs.current[i + 1]?.focus();
+  };
+
+  const handleKey = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    const d = parseInt(e.key);
+    if (!isNaN(d) && d >= 0 && d <= 9) {
+      e.preventDefault();
+      setDigit(i, d);
+      return;
+    }
+    if (e.key === 'ArrowUp') { e.preventDefault(); onChange(clamp(value + FREQ_STEPS[i])); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); onChange(clamp(value - FREQ_STEPS[i])); }
+    if (e.key === 'ArrowRight' && i < 4) { e.preventDefault(); inputRefs.current[i + 1]?.focus(); }
+    if (e.key === 'ArrowLeft' && i > 0) { e.preventDefault(); inputRefs.current[i - 1]?.focus(); }
+    if (e.key === '.' && i < 4) { e.preventDefault(); inputRefs.current[4]?.focus(); }
+  };
+
+  return (
+    <div>
+      <label className="text-xs text-gray-400 mb-1 block">{label}</label>
+      <div className="flex items-center justify-end">
+        {digits.map((d, i) => (
+          <div key={i} className="flex items-center">
+            {i === 4 && <span className="text-base font-mono text-gray-500 leading-tight mx-px">.</span>}
+            <div className="flex flex-col items-center" style={{ width: 22 }}>
+              <button className={arrowBtn} onClick={() => onChange(clamp(value + FREQ_STEPS[i]))}>▲</button>
+              <input
+                ref={el => { inputRefs.current[i] = el; }}
+                type="text"
+                inputMode="numeric"
+                value={d}
+                readOnly
+                onKeyDown={e => handleKey(i, e)}
+                onFocus={e => e.target.select()}
+                className={digitInput}
+              />
+              <button className={arrowBtn} onClick={() => onChange(clamp(value - FREQ_STEPS[i]))}>▼</button>
+            </div>
+          </div>
+        ))}
+        <span className="text-xs text-gray-500 ml-1.5">MHz</span>
+      </div>
+    </div>
+  );
+}
+
 interface Props {
   liveActive: boolean;
   onLiveToggle: (active: boolean) => void;
@@ -130,6 +198,8 @@ export default function ControlPanel({ liveActive, onLiveToggle, audioEnabled, o
   const [loading, setLoading] = useState(false);
   const [volume, setVolume] = useState(50);
   const [demodMode, setDemodMode] = useState<DemodMode>('fm');
+  const [presetsOpen, setPresetsOpen] = useState(false);
+  const [inputsOpen, setInputsOpen] = useState(true);
   const lastLiveParams = useRef('');
 
   // Debounced retune: restart live stream when freq/gain change
@@ -244,42 +314,60 @@ export default function ControlPanel({ liveActive, onLiveToggle, audioEnabled, o
     <div className="space-y-4">
       <ModeSelector mode={mode} onChange={handleModeChange} />
 
-      <PresetBar
-        activeStart={isLive ? centerMhz - 1 : startMhz}
-        activeStop={isLive ? centerMhz + 1 : stopMhz}
-        onSelect={handlePreset}
-      />
-
-      {/* Frequency controls */}
-      {isLive ? (
-        <div className="space-y-3">
-          <ParamSlider label="Center Freq" value={centerMhz} onChange={setCenterMhz}
-            min={24} max={1766} step={0.1} unit="MHz" logScale nudgeSteps={[0.1, 1, 10]} />
-        </div>
-      ) : (
-        <>
-          <div className="space-y-3">
-            <ParamSlider label="Start Freq" value={startMhz} onChange={setStartMhz}
-              min={24} max={1766} step={0.1} unit="MHz" logScale nudgeSteps={[0.1, 1, 10]} />
-            <ParamSlider label="Stop Freq" value={stopMhz} onChange={setStopMhz}
-              min={24} max={1766} step={0.1} unit="MHz" logScale nudgeSteps={[0.1, 1, 10]} />
+      <div>
+        <button
+          onClick={() => setPresetsOpen(o => !o)}
+          className="flex items-center justify-between w-full text-xs text-gray-400 hover:text-gray-200 transition-colors"
+        >
+          <span className="uppercase tracking-wider">Presets</span>
+          <span className="text-sm text-cyan-400">{presetsOpen ? '▲' : '▼'}</span>
+        </button>
+        {presetsOpen && (
+          <div className="mt-2">
+            <PresetBar
+              activeStart={isLive ? centerMhz - 1 : startMhz}
+              activeStop={isLive ? centerMhz + 1 : stopMhz}
+              onSelect={handlePreset}
+            />
           </div>
+        )}
+      </div>
 
-          <ScanInfo bandwidth={bandwidth} numChunks={numChunks} duration={duration} />
+      <div>
+        <button
+          onClick={() => setInputsOpen(o => !o)}
+          className="flex items-center justify-between w-full text-xs text-gray-400 hover:text-gray-200 transition-colors"
+        >
+          <span className="uppercase tracking-wider">Inputs</span>
+          <span className="text-sm text-cyan-400">{inputsOpen ? '▲' : '▼'}</span>
+        </button>
+        {inputsOpen && (
+          <div className="mt-2 space-y-3">
+            {isLive ? (
+              <FreqInput label="Center Freq" value={centerMhz} onChange={setCenterMhz} min={24} max={1766} />
+            ) : (
+              <>
+                <FreqInput label="Start Freq" value={startMhz} onChange={setStartMhz} min={24} max={1766} />
+                <FreqInput label="Stop Freq" value={stopMhz} onChange={setStopMhz} min={24} max={1766} />
 
-          {invalid && (
-            <div className="text-xs text-red-400 bg-red-400/5 rounded px-2 py-1.5">
-              Stop frequency must be greater than start frequency.
-            </div>
-          )}
+                <ScanInfo bandwidth={bandwidth} numChunks={numChunks} duration={duration} />
 
-          <ParamSlider label={numChunks > 1 ? 'Duration / chunk' : 'Duration'} value={duration} onChange={setDuration}
-            min={0.5} max={30} step={0.5} unit="s" />
-        </>
-      )}
+                {invalid && (
+                  <div className="text-xs text-red-400 bg-red-400/5 rounded px-2 py-1.5">
+                    Stop frequency must be greater than start frequency.
+                  </div>
+                )}
 
-      <ParamSlider label="Gain" value={gain} onChange={setGain}
-        min={0} max={50} step={1} unit="dB" />
+                <ParamSlider label={numChunks > 1 ? 'Duration / chunk' : 'Duration'} value={duration} onChange={setDuration}
+                  min={0.5} max={30} step={0.5} unit="s" />
+              </>
+            )}
+
+            <ParamSlider label="Gain" value={gain} onChange={setGain}
+              min={0} max={50} step={1} unit="dB" />
+          </div>
+        )}
+      </div>
 
       <button
         onClick={handleSubmit}

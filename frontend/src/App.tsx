@@ -100,9 +100,7 @@ function MainContent({ liveActive, liveFrame, selectedJob, logs, connected, onCl
           <ResultView job={selectedJob} />
         )}
       </div>
-      <div className="h-48 flex-shrink-0">
-        <LogConsole logs={logs} connected={connected} onClear={onClear} />
-      </div>
+      <LogConsole logs={logs} connected={connected} onClear={onClear} />
     </div>
   );
 }
