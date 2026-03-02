@@ -12,7 +12,7 @@ export interface ChartView {
 export interface SpectrumFrame {
   freqs_mhz: number[];
   power_db: number[];
-  peaks: { freq_mhz: number; power_db: number; bandwidth_khz: number }[];
+  peaks: { freq_mhz: number; power_db: number; bandwidth_khz: number; signal_type?: string }[];
 }
 
 interface Props {
@@ -39,6 +39,21 @@ const FILL = 'rgba(0,212,255,0.12)';
 const PEAK = '#ff6b35';
 const MAX_HOLD_COLOR = 'rgba(255,100,50,0.25)';
 const VFO_COLOR = '#44ff44';
+
+const TYPE_COLORS: Record<string, string> = {
+  fm_broadcast: '#ff6b35',
+  narrowband_fm: '#44aaff',
+  digital: '#ff44ff',
+  am_broadcast: '#44ff88',
+  carrier: '#ffdd44',
+};
+const TYPE_LABELS: Record<string, string> = {
+  fm_broadcast: 'FM',
+  narrowband_fm: 'NFM',
+  digital: 'DIG',
+  am_broadcast: 'AM',
+  carrier: 'CW',
+};
 
 // ── Plugins ──────────────────────────────────────────────
 
@@ -77,7 +92,6 @@ function peakMarkersPlugin(
         ctx.rect(bbox.left, bbox.top, bbox.width, bbox.height);
         ctx.clip();
 
-        ctx.fillStyle = PEAK;
         ctx.font = `bold ${Math.round(9 * dpr)}px monospace`;
         ctx.textAlign = 'center';
 
@@ -85,6 +99,10 @@ function peakMarkersPlugin(
           const x = u.valToPos(pk.freq_mhz, 'x', true);
           const y = u.valToPos(pk.power_db, 'y', true);
           if (x < bbox.left || x > bbox.left + bbox.width) continue;
+
+          const color = (pk.signal_type && TYPE_COLORS[pk.signal_type]) || '#888888';
+          const label = pk.signal_type ? TYPE_LABELS[pk.signal_type] : undefined;
+          ctx.fillStyle = color;
 
           const s = 4 * dpr;
           ctx.beginPath();
@@ -94,6 +112,9 @@ function peakMarkersPlugin(
           ctx.closePath();
           ctx.fill();
           ctx.fillText(`${pk.freq_mhz.toFixed(3)}`, x, y - 11 * dpr);
+          if (label) {
+            ctx.fillText(label, x, y - 20 * dpr);
+          }
         }
         ctx.restore();
       },

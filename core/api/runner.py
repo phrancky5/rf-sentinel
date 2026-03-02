@@ -154,18 +154,10 @@ class JobRunner:
         else:
             _emit(job_id, "  No signals above noise floor")
 
-    @staticmethod
-    def _serialize_peaks(peaks) -> list[dict]:
-        return [
-            {"freq_mhz": pk.freq_mhz, "power_db": pk.power_db,
-             "prominence_db": pk.prominence_db, "bandwidth_khz": pk.bandwidth_khz}
-            for pk in peaks
-        ]
-
-    def _finalize_job(self, job: Job, t0: float, peaks) -> None:
+    def _finalize_job(self, job: Job, t0: float, peaks: list[dict]) -> None:
         job.status = JobStatus.COMPLETE
         job.duration_s = round(time.time() - t0, 2)
-        job.params["peaks"] = self._serialize_peaks(peaks)
+        job.params["peaks"] = peaks
         _emit_job_status(job)
 
     # ── Scan (stitched) ─────────────────────────────────
@@ -177,6 +169,7 @@ class JobRunner:
 
         try:
             from core.dsp import compute_waterfall, trim_waterfall, stitch_waterfalls, find_peaks
+            from core.dsp.classify import classify_peaks
 
             segments, num_chunks = self._capture_segments(job, "Scan", compute_waterfall, trim_waterfall)
             if num_chunks > 1:
@@ -186,8 +179,9 @@ class JobRunner:
             result = stitch_waterfalls(segments)
 
             _emit(job.id, "Detecting signals...")
-            peaks = find_peaks(result.freqs_mhz, result.mean_psd_db)
-            self._log_peaks(job.id, peaks)
+            raw_peaks = find_peaks(result.freqs_mhz, result.mean_psd_db)
+            self._log_peaks(job.id, raw_peaks)
+            peaks = classify_peaks(result.freqs_mhz, result.mean_psd_db, raw_peaks)
 
             freq_step = max(1, len(result.freqs_mhz) // 1024)
             time_step = max(1, result.power_db.shape[1] // 256)
@@ -358,6 +352,7 @@ class JobRunner:
         import json
         from core.dsp import compute_psd, find_peaks
         from core.dsp.tracker import PeakTracker
+        from core.dsp.classify import classify_peaks
 
         DOWNSAMPLE_POINTS = 1024
         result = compute_psd(capture, nfft=2048)
@@ -370,16 +365,13 @@ class JobRunner:
         if self._peak_tracker is None:
             self._peak_tracker = PeakTracker()
         tracked = self._peak_tracker.update(raw_peaks)
+        classified = classify_peaks(result.freqs_mhz, result.power_db, tracked)
 
         payload = json.dumps({
             "type": "spectrum",
             "freqs_mhz": freqs.tolist(),
             "power_db": power.tolist(),
-            "peaks": [
-                {"freq_mhz": round(pk.freq_mhz, 4), "power_db": pk.power_db,
-                 "bandwidth_khz": pk.bandwidth_khz}
-                for pk in tracked
-            ],
+            "peaks": classified,
         })
 
         if _log_callback:
