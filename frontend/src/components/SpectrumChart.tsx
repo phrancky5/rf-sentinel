@@ -46,6 +46,11 @@ export const TYPE_COLORS: Record<string, string> = {
   digital: '#ff44ff',
   am_broadcast: '#44ff88',
   carrier: '#ffdd44',
+  aviation: '#00e5ff',
+  ham: '#76ff03',
+  ism: '#e040fb',
+  gsm: '#ff5252',
+  adsb: '#40c4ff',
 };
 export const TYPE_LABELS: Record<string, string> = {
   fm_broadcast: 'FM',
@@ -53,6 +58,11 @@ export const TYPE_LABELS: Record<string, string> = {
   digital: 'DIG',
   am_broadcast: 'AM',
   carrier: 'CW',
+  aviation: 'AIR',
+  ham: 'HAM',
+  ism: 'ISM',
+  gsm: 'GSM',
+  adsb: 'ADS',
 };
 
 // ── Plugins ──────────────────────────────────────────────

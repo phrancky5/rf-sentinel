@@ -1,14 +1,21 @@
-"""Rule-based signal classification from spectral features."""
+"""Rule-based signal classification from spectral features + band awareness."""
 
 from __future__ import annotations
 
 import numpy as np
+
+from .bands import lookup_band
 
 FM_BROADCAST = "fm_broadcast"
 NARROWBAND_FM = "narrowband_fm"
 DIGITAL = "digital"
 AM_BROADCAST = "am_broadcast"
 CARRIER = "carrier"
+AVIATION = "aviation"
+HAM = "ham"
+ISM = "ism"
+GSM = "gsm"
+ADSB = "adsb"
 UNKNOWN = "unknown"
 
 SHORT_LABELS = {
@@ -17,6 +24,11 @@ SHORT_LABELS = {
     DIGITAL: "DIG",
     AM_BROADCAST: "AM",
     CARRIER: "CW",
+    AVIATION: "AIR",
+    HAM: "HAM",
+    ISM: "ISM",
+    GSM: "GSM",
+    ADSB: "ADS",
     UNKNOWN: "",
 }
 
@@ -54,6 +66,29 @@ def _edge_steepness(power_db: np.ndarray, freq_step_khz: float) -> float:
     return float((left_slope + right_slope) / 2)
 
 
+def _apply_band_prior(freq_mhz: float, signal_type: str, confidence: float) -> tuple[str, float, str | None]:
+    """Adjust classification using frequency band knowledge.
+
+    Returns (signal_type, confidence, band_name).
+    """
+    band = lookup_band(freq_mhz)
+    if band is None:
+        return signal_type, confidence, None
+
+    expected = band.expected_type
+
+    if signal_type == expected:
+        # Spectral and band agree — boost confidence
+        return signal_type, min(0.98, confidence + 0.1), band.name
+
+    if signal_type == UNKNOWN:
+        # No spectral match but we know the band — use band's expected type
+        return expected, 0.55, band.name
+
+    # Spectral says one thing, band says another — trust spectral but note the band
+    return signal_type, max(0.3, confidence - 0.1), band.name
+
+
 def _classify_one(
     freqs_mhz: np.ndarray,
     power_db: np.ndarray,
@@ -80,7 +115,7 @@ def _classify_one(
     occ_bw = _occupied_bandwidth_khz(sl_freqs, sl_linear)
     steepness = _edge_steepness(sl_db, freq_step_khz)
 
-    # Rule-based classification
+    # Rule-based spectral classification
     signal_type = UNKNOWN
     confidence = 0.5
 
@@ -100,13 +135,18 @@ def _classify_one(
         signal_type = AM_BROADCAST
         confidence = 0.5
 
+    # Apply band-aware prior
+    peak_freq = getattr(peak, "freq_mhz", 0.0)
+    signal_type, confidence, band_name = _apply_band_prior(peak_freq, signal_type, confidence)
+
     return {
-        "freq_mhz": round(getattr(peak, "freq_mhz", 0.0), 4),
+        "freq_mhz": round(peak_freq, 4),
         "power_db": round(getattr(peak, "power_db", 0.0), 1),
         "prominence_db": round(prominence, 1),
         "bandwidth_khz": round(bw_khz, 1),
         "signal_type": signal_type,
         "confidence": round(confidence, 2),
+        "band": band_name,
     }
 
 
