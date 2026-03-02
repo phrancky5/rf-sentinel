@@ -105,15 +105,19 @@ function peakMarkersPlugin(
         ctx.font = `bold ${Math.round(9 * dpr)}px monospace`;
         ctx.textAlign = 'center';
 
-        for (const pk of peaks.slice(0, 20)) {
+        const visible = peaks.filter(pk => {
+          const x = u.valToPos(pk.freq_mhz, 'x', true);
+          return x >= bbox.left && x <= bbox.left + bbox.width;
+        });
+        const labelGap = 50 * dpr;
+        let lastLabelX = -Infinity;
+        for (const pk of visible) {
           const x = u.valToPos(pk.freq_mhz, 'x', true);
           const y = u.valToPos(pk.power_db, 'y', true);
-          if (x < bbox.left || x > bbox.left + bbox.width) continue;
-
           const color = (pk.signal_type && TYPE_COLORS[pk.signal_type]) || '#888888';
-          const label = pk.signal_type ? TYPE_LABELS[pk.signal_type] : undefined;
           ctx.fillStyle = color;
 
+          // Always draw the triangle marker
           const s = 4 * dpr;
           ctx.beginPath();
           ctx.moveTo(x, y - 8 * dpr);
@@ -121,9 +125,15 @@ function peakMarkersPlugin(
           ctx.lineTo(x + s, y - 2 * dpr);
           ctx.closePath();
           ctx.fill();
-          ctx.fillText(`${pk.freq_mhz.toFixed(3)}`, x, y - 11 * dpr);
-          if (label) {
-            ctx.fillText(label, x, y - 20 * dpr);
+
+          // Only draw text labels when there's enough space
+          if (x - lastLabelX >= labelGap) {
+            lastLabelX = x;
+            const label = pk.signal_type ? TYPE_LABELS[pk.signal_type] : undefined;
+            ctx.fillText(`${pk.freq_mhz.toFixed(3)}`, x, y - 11 * dpr);
+            if (label) {
+              ctx.fillText(label, x, y - 20 * dpr);
+            }
           }
         }
         ctx.restore();
@@ -654,7 +664,7 @@ export default function SpectrumChart({
 
   const xSliderMarkers: SliderMarker[] = [];
   if (frame?.peaks) {
-    for (const pk of frame.peaks.slice(0, 20)) {
+    for (const pk of frame.peaks) {
       xSliderMarkers.push({ pos: pk.freq_mhz, color: PEAK });
     }
   }

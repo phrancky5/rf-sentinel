@@ -1,66 +1,133 @@
-"""Peak detection — find signals above the noise floor."""
+"""Signal detection: adaptive noise floor, threshold-then-segment, temporal EMA."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.signal import find_peaks as scipy_find_peaks
+from scipy.ndimage import percentile_filter
 
 
 @dataclass
 class SignalPeak:
-    """A detected signal peak."""
+    """A detected signal."""
     freq_mhz: float
     power_db: float
     prominence_db: float
     bandwidth_khz: float
 
 
+NOISE_WINDOW_BINS = 501
+NOISE_PERCENTILE = 25
+MIN_SNR_DB = 5.0
+MIN_SEGMENT_BINS = 1
+MAX_GAP_KHZ = 50.0
+MAX_SIGNAL_BW_KHZ = 300.0
+
+
+def _estimate_noise_floor(power_db: np.ndarray) -> np.ndarray:
+    """Estimate local noise floor using rolling percentile filter."""
+    window = min(NOISE_WINDOW_BINS, len(power_db) // 2 * 2 + 1)
+    if window < 3:
+        return np.full_like(power_db, np.percentile(power_db, NOISE_PERCENTILE))
+    return percentile_filter(power_db, percentile=NOISE_PERCENTILE, size=window, mode="reflect")
+
+
+PEAKS_PER_MHZ = 5
+
+
 def find_peaks(
     freqs_mhz: np.ndarray,
     power_db: np.ndarray,
-    min_prominence_db: float = 8.0,
-    min_distance_khz: float = 25.0,
-    max_peaks: int = 30,
+    min_snr_db: float = MIN_SNR_DB,
+    max_peaks: int = 0,
 ) -> list[SignalPeak]:
-    """Find signal peaks in a power spectrum.
+    """Detect signals using threshold-then-segment.
 
-    Args:
-        freqs_mhz: Frequency axis in MHz.
-        power_db: Power values in dB.
-        min_prominence_db: Minimum prominence above local noise floor.
-        min_distance_khz: Minimum distance between peaks in kHz.
-        max_peaks: Maximum number of peaks to return.
+    1. Estimate adaptive noise floor (rolling median).
+    2. Threshold: mark bins where power > noise + min_snr_db.
+    3. Find contiguous regions of above-threshold bins.
+    4. Each region = one signal.  Report peak power, center freq,
+       SNR, and bandwidth from the region boundaries.
 
-    Returns:
-        List of SignalPeak sorted by power (strongest first).
+    max_peaks=0 (default) auto-scales based on bandwidth.
     """
-    freq_step_khz = (freqs_mhz[-1] - freqs_mhz[0]) / (len(freqs_mhz) - 1) * 1000
-    min_distance_samples = max(1, int(min_distance_khz / freq_step_khz))
-
-    indices, properties = scipy_find_peaks(
-        power_db,
-        prominence=min_prominence_db,
-        distance=min_distance_samples,
-        width=1,
-    )
-
-    if len(indices) == 0:
+    if len(freqs_mhz) < 4:
         return []
 
-    prominences = properties["prominences"]
-    widths = properties["widths"] * freq_step_khz
+    freq_step_khz = float((freqs_mhz[-1] - freqs_mhz[0]) / (len(freqs_mhz) - 1) * 1000)
+    bw_mhz = float(freqs_mhz[-1] - freqs_mhz[0])
 
-    peaks = [
-        SignalPeak(
-            freq_mhz=round(float(freqs_mhz[idx]), 4),
-            power_db=round(float(power_db[idx]), 1),
-            prominence_db=round(float(prom), 1),
-            bandwidth_khz=round(float(w), 1),
-        )
-        for idx, prom, w in zip(indices, prominences, widths)
-    ]
+    if max_peaks <= 0:
+        max_peaks = max(50, int(bw_mhz * PEAKS_PER_MHZ))
 
-    peaks.sort(key=lambda p: p.power_db, reverse=True)
+    noise_floor = _estimate_noise_floor(power_db)
+    excess_db = power_db - noise_floor
+
+    above = excess_db >= min_snr_db
+
+    # Find contiguous regions via diff
+    padded = np.concatenate(([False], above, [False]))
+    edges = np.diff(padded.astype(np.int8))
+    starts = np.where(edges == 1)[0]
+    stops = np.where(edges == -1)[0]
+
+    if len(starts) == 0:
+        return []
+
+    # Drop narrow noise spikes (< MIN_SEGMENT_BINS wide)
+    wide = np.array(stops) - np.array(starts) >= MIN_SEGMENT_BINS
+    starts = starts[wide]
+    stops = stops[wide]
+    if len(starts) == 0:
+        return []
+
+    # Merge segments separated by small gaps (e.g. FM modulation dips),
+    # but cap total width so dense bands don't chain into one mega-segment
+    max_gap_bins = max(1, int(MAX_GAP_KHZ / freq_step_khz))
+    max_bw_bins = int(MAX_SIGNAL_BW_KHZ / freq_step_khz)
+    merged_starts = [starts[0]]
+    merged_stops = [stops[0]]
+    for i in range(1, len(starts)):
+        gap_ok = starts[i] - merged_stops[-1] <= max_gap_bins
+        width_ok = stops[i] - merged_starts[-1] <= max_bw_bins
+        if gap_ok and width_ok:
+            merged_stops[-1] = stops[i]
+        else:
+            merged_starts.append(starts[i])
+            merged_stops.append(stops[i])
+
+    peaks: list[SignalPeak] = []
+    for lo, hi in zip(merged_starts, merged_stops):
+        peak_idx = lo + int(np.argmax(power_db[lo:hi]))
+
+        bw_khz = (hi - lo) * freq_step_khz
+        snr = float(excess_db[peak_idx])
+
+        peaks.append(SignalPeak(
+            freq_mhz=round(float(freqs_mhz[peak_idx]), 4),
+            power_db=round(float(power_db[peak_idx]), 1),
+            prominence_db=round(snr, 1),
+            bandwidth_khz=round(bw_khz, 1),
+        ))
+
+    peaks.sort(key=lambda p: p.prominence_db, reverse=True)
     return peaks[:max_peaks]
+
+
+class PsdSmoother:
+    """Exponential moving average over consecutive PSD frames (live mode)."""
+
+    def __init__(self, alpha: float = 0.3) -> None:
+        self._alpha = alpha
+        self._prev: np.ndarray | None = None
+
+    def update(self, power_db: np.ndarray) -> np.ndarray:
+        if self._prev is None or len(self._prev) != len(power_db):
+            self._prev = power_db.copy()
+            return power_db
+        self._prev[:] = self._alpha * power_db + (1 - self._alpha) * self._prev
+        return self._prev.copy()
+
+    def reset(self) -> None:
+        self._prev = None

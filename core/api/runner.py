@@ -94,6 +94,7 @@ class JobRunner:
         self._demod_state = None
         self._vfo_freq_hz: Optional[float] = None
         self._peak_tracker = None
+        self._psd_smoother = None
 
     def _submit_job(self, job_type: str, params: dict, run_fn: Callable) -> Job:
         if self._live_active:
@@ -183,18 +184,24 @@ class JobRunner:
             self._log_peaks(job.id, raw_peaks)
             peaks = classify_peaks(result.freqs_mhz, result.mean_psd_db, raw_peaks)
 
-            freq_step = max(1, len(result.freqs_mhz) // 1024)
+            # 1D spectrum: send at full res (uPlot handles 25k+ points fine)
+            spec_freqs = np.round(result.freqs_mhz, 4).tolist()
+            spec_power = np.round(result.mean_psd_db, 1).tolist()
+
+            # 2D waterfall: decimate more aggressively
+            wf_freq_step = max(1, len(result.freqs_mhz) // 1024)
             time_step = max(1, result.power_db.shape[1] // 256)
-            power_ds = result.power_db[::freq_step, ::time_step]
-            freqs_ds = np.round(result.freqs_mhz[::freq_step], 4).tolist()
+            power_ds = result.power_db[::wf_freq_step, ::time_step]
+            wf_freqs = np.round(result.freqs_mhz[::wf_freq_step], 4).tolist()
+
             job.params["waterfall_data"] = {
-                "freqs_mhz": freqs_ds,
+                "freqs_mhz": wf_freqs,
                 "power_db": np.round(power_ds.T, 1).tolist(),
                 "duration_s": round(float(result.times[-1]), 2),
             }
             job.params["spectrum_data"] = {
-                "freqs_mhz": freqs_ds,
-                "power_db": np.round(result.mean_psd_db[::freq_step], 1).tolist(),
+                "freqs_mhz": spec_freqs,
+                "power_db": spec_power,
             }
 
             self._finalize_job(job, t0, peaks)
@@ -237,6 +244,7 @@ class JobRunner:
         self._demod_state = None
         self._vfo_freq_hz = None
         self._peak_tracker = None
+        self._psd_smoother = None
         self._live_active = True
         self._live_thread = threading.Thread(
             target=self._live_loop,
@@ -286,6 +294,7 @@ class JobRunner:
         )
         self._demod_state = None
         self._peak_tracker = None
+        self._psd_smoother = None
         logger.debug("retune: fc=%.3f MHz gain=%.0f dB", center_hz / 1e6, gain)
 
     def toggle_audio(self, enabled: bool, demod_mode: DemodMode = DemodMode.FM) -> None:
@@ -351,21 +360,26 @@ class JobRunner:
         """Compute and send spectrum data over WebSocket."""
         import json
         from core.dsp import compute_psd, find_peaks
+        from core.dsp.peaks import PsdSmoother
         from core.dsp.tracker import PeakTracker
         from core.dsp.classify import classify_peaks
 
         DOWNSAMPLE_POINTS = 1024
         result = compute_psd(capture, nfft=2048)
 
+        if self._psd_smoother is None:
+            self._psd_smoother = PsdSmoother()
+        smoothed = self._psd_smoother.update(result.power_db)
+
         step = max(1, len(result.freqs_mhz) // DOWNSAMPLE_POINTS)
         freqs = result.freqs_mhz[::step]
-        power = result.power_db[::step]
+        power = smoothed[::step]
 
-        raw_peaks = find_peaks(result.freqs_mhz, result.power_db)
+        raw_peaks = find_peaks(result.freqs_mhz, smoothed)
         if self._peak_tracker is None:
             self._peak_tracker = PeakTracker()
-        tracked = self._peak_tracker.update(raw_peaks)
-        classified = classify_peaks(result.freqs_mhz, result.power_db, tracked)
+        tracked = self._peak_tracker.update(raw_peaks, result.freqs_mhz, smoothed)
+        classified = classify_peaks(result.freqs_mhz, smoothed, tracked)
 
         payload = json.dumps({
             "type": "spectrum",

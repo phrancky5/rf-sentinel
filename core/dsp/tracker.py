@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+
+import numpy as np
 
 from core.dsp.peaks import SignalPeak
 
@@ -28,6 +30,12 @@ class TrackedPeak:
         return self.hit_count >= CONFIRM_FRAMES
 
 
+def _lookup_power(freq_mhz: float, freqs: np.ndarray, power_db: np.ndarray) -> float:
+    """Look up the current power at a frequency from the PSD."""
+    idx = int(np.argmin(np.abs(freqs - freq_mhz)))
+    return float(power_db[idx])
+
+
 class PeakTracker:
     def __init__(self) -> None:
         self._tracks: list[TrackedPeak] = []
@@ -38,11 +46,12 @@ class PeakTracker:
         self._next_id += 1
         return tid
 
-    def update(self, peaks: list[SignalPeak]) -> list[TrackedPeak]:
+    def update(self, peaks: list[SignalPeak],
+               freqs_mhz: np.ndarray | None = None,
+               power_db: np.ndarray | None = None) -> list[TrackedPeak]:
         matched_tracks: set[int] = set()
         matched_peaks: set[int] = set()
 
-        # Build distance pairs and sort by distance (greedy nearest-neighbor)
         pairs: list[tuple[float, int, int]] = []
         for ti, track in enumerate(self._tracks):
             for pi, peak in enumerate(peaks):
@@ -65,7 +74,6 @@ class PeakTracker:
             matched_tracks.add(ti)
             matched_peaks.add(pi)
 
-        # New tracks for unmatched peaks
         for pi, peak in enumerate(peaks):
             if pi in matched_peaks:
                 continue
@@ -77,13 +85,16 @@ class PeakTracker:
                 bandwidth_khz=peak.bandwidth_khz,
             ))
 
-        # Age unmatched tracks, drop expired
+        # Age unmatched tracks — snap power to current PSD so markers stay accurate
+        has_psd = freqs_mhz is not None and power_db is not None
         for ti, track in enumerate(self._tracks):
             if ti not in matched_tracks and track.hit_count > 0:
                 track.miss_count += 1
+                if has_psd:
+                    track.power_db = _lookup_power(track.freq_mhz, freqs_mhz, power_db)
+
         self._tracks = [t for t in self._tracks if t.miss_count <= DECAY_FRAMES]
 
-        # Return only confirmed, sorted by power
         result = [t for t in self._tracks if t.confirmed]
         result.sort(key=lambda t: t.power_db, reverse=True)
         return result
