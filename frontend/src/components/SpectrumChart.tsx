@@ -13,7 +13,7 @@ export interface ChartView {
 export interface SpectrumFrame {
   freqs_mhz: number[];
   power_db: number[];
-  peaks: { freq_mhz: number; power_db: number; bandwidth_khz: number; signal_type?: string; duty_cycle?: number; transient?: boolean }[];
+  peaks: { freq_mhz: number; power_db: number; bandwidth_khz: number; signal_type?: string; confidence?: number; duty_cycle?: number; transient?: boolean }[];
 }
 
 interface Props {
@@ -147,7 +147,8 @@ function peakMarkersPlugin(
             const label = pk.signal_type ? TYPE_LABELS[pk.signal_type] : undefined;
             ctx.fillText(`${pk.freq_mhz.toFixed(3)}`, x, markerY - 11 * dpr);
             if (label) {
-              ctx.fillText(label, x, markerY - 20 * dpr);
+              const conf = pk.confidence != null ? ` ${Math.round(pk.confidence * 100)}%` : '';
+              ctx.fillText(label + conf, x, markerY - 20 * dpr);
             }
           }
         }

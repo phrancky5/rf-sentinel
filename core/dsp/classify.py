@@ -155,6 +155,14 @@ def _apply_temporal(
 
 _NFM_COMPATIBLE = {AVIATION, HAM, ISM, NARROWBAND_FM}
 
+_ML_CLASS_MAP = {
+    "fm": FM_BROADCAST,
+    "am": AM_BROADCAST,
+    "nfm": NARROWBAND_FM,
+    "digital": DIGITAL,
+    "noise": None,
+}
+
 
 def _apply_band_prior(freq_mhz: float, signal_type: str, confidence: float) -> tuple[str, float, str | None]:
     """Adjust classification using frequency band knowledge.
@@ -187,6 +195,7 @@ def _classify_one(
     power_db: np.ndarray,
     peak,
     waterfall_db: np.ndarray | None = None,
+    ml_result: tuple[str, float] | None = None,
 ) -> dict:
     """Classify a single peak and return a dict with peak fields + classification."""
     freq_step_khz = float((freqs_mhz[-1] - freqs_mhz[0]) / (len(freqs_mhz) - 1) * 1000)
@@ -237,6 +246,16 @@ def _classify_one(
         signal_type = AM_BROADCAST
         confidence = 0.5
 
+    # ML override: replace rule-based with CNN classification when available
+    if ml_result is not None:
+        ml_class, ml_conf = ml_result
+        mapped = _ML_CLASS_MAP.get(ml_class)
+        if mapped is not None:
+            signal_type = mapped
+            confidence = ml_conf
+        else:
+            confidence = max(0.2, confidence - 0.2)
+
     # Temporal override: reclassify bursty signals that look like FM on airband
     if duty_cycle is not None:
         signal_type, confidence = _apply_temporal(
@@ -268,11 +287,27 @@ def classify_peaks(
     power_db: np.ndarray,
     peaks,
     waterfall_db: np.ndarray | None = None,
+    iq_samples: np.ndarray | None = None,
+    sample_rate: float | None = None,
+    center_freq_hz: float | None = None,
 ) -> list[dict]:
     """Classify a list of peaks and return dicts with signal_type + confidence.
 
     waterfall_db: optional 2D array [freq x time] in dB for temporal features.
+    iq_samples/sample_rate/center_freq_hz: optional raw IQ for ML classification.
     """
     if len(freqs_mhz) < 4 or not peaks:
         return []
-    return [_classify_one(freqs_mhz, power_db, pk, waterfall_db) for pk in peaks]
+
+    ml_results = None
+    if iq_samples is not None and sample_rate and center_freq_hz:
+        from core.ml.inference import get_classifier
+        classifier = get_classifier()
+        peak_freqs_hz = [getattr(pk, "freq_mhz", 0.0) * 1e6 for pk in peaks]
+        ml_results = classifier.classify(iq_samples, sample_rate, center_freq_hz, peak_freqs_hz)
+
+    return [
+        _classify_one(freqs_mhz, power_db, pk, waterfall_db,
+                      ml_result=ml_results[i] if ml_results else None)
+        for i, pk in enumerate(peaks)
+    ]

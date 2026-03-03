@@ -33,6 +33,7 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 data/recordings/
+data/models/
 !data/.gitkeep
 
 # Matplotlib output
