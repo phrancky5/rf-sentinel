@@ -29,6 +29,7 @@ Thumbs.db
 data/*.raw
 data/*.iq
 data/*.npy
+data/*.db
 !data/.gitkeep
 
 # Matplotlib output

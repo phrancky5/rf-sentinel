@@ -75,6 +75,16 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     _ws_clients.append(ws)
     logger.info(f"WebSocket connected ({len(_ws_clients)} clients)")
     try:
+        from core.api.db import list_scans
+        history = list_scans(limit=20)["scans"]
+        logger.info(f"Sending {len(history)} historical scans to client")
+        for scan in history:
+            await ws.send_text(json.dumps({"type": "job_update", "job": {
+                "id": scan["id"], "type": "scan", "status": "complete",
+                "params": {k: scan[k] for k in ("start_mhz", "stop_mhz", "duration", "gain")},
+                "error": None, "created_at": scan["created_at"],
+                "duration_s": scan["duration_s"],
+            }}))
         while True:
             data = await ws.receive_text()
             if data == "ping":

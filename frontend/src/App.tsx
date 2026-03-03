@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useMemo } from 'react';
 import { useWebSocket, LogEntry } from './hooks/useWebSocket';
 import { useAudioPlayer } from './hooks/useAudioPlayer';
-import { JobInfo, setVfo, toggleAudio } from './api';
+import { JobInfo, setVfo, toggleAudio, getScan } from './api';
 import ControlPanel, { ControlPanelHandle } from './components/ControlPanel';
 import LogConsole from './components/LogConsole';
 import JobList from './components/JobList';
@@ -255,7 +255,21 @@ export default function App() {
     });
   }, []);
 
-  const { connected, logs, clearLogs, jobs } = useWebSocket(WS_URL, handleSpectrum);
+  const { connected, logs, clearLogs, jobs, setJobs } = useWebSocket(WS_URL, handleSpectrum);
+
+  const handleSelectJob = useCallback(async (job: JobInfo | null) => {
+    if (!job) { setSelectedJob(null); return; }
+    if (job.params.spectrum_data) { setSelectedJob(job); return; }
+    if (job.status === 'complete') {
+      try {
+        const full = await getScan(job.id);
+        setJobs(prev => prev.map(j => j.id === job.id ? full : j));
+        setSelectedJob(full);
+      } catch { setSelectedJob(job); }
+      return;
+    }
+    setSelectedJob(job);
+  }, [setJobs]);
 
   const handleFreqClick = useCallback((freq_mhz: number) => {
     if (!liveActive) return;
@@ -308,7 +322,7 @@ export default function App() {
           onPeakClick={liveActive ? handleFreqClick : handleScanPeakClick}
           jobs={jobs}
           selectedJob={selectedJob}
-          onSelectJob={setSelectedJob}
+          onSelectJob={handleSelectJob}
         />
         <MainContent
           liveActive={liveActive}

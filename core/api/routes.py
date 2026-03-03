@@ -54,4 +54,17 @@ def create_routes(runner: JobRunner) -> APIRouter:
         runner.live.set_vfo(req.freq_mhz)
         return {"vfo_freq_mhz": req.freq_mhz}
 
+    @router.get("/api/scans")
+    async def get_scan_history(limit: int = 50, offset: int = 0):
+        from core.api.db import list_scans
+        return list_scans(limit, offset)
+
+    @router.get("/api/scans/{scan_id}")
+    async def get_scan_detail(scan_id: str):
+        from core.api.db import get_scan
+        result = get_scan(scan_id)
+        if not result:
+            return JSONResponse({"error": "Scan not found"}, status_code=404)
+        return result
+
     return router

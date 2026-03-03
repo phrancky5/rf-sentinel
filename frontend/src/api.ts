@@ -65,3 +65,30 @@ export async function setVfo(freq_mhz: number): Promise<{ vfo_freq_mhz: number }
   return (await post('/api/live/vfo', { freq_mhz })).json();
 }
 
+// ── Scan history ──────────────────────────────────────
+
+export interface ScanSummary {
+  id: string;
+  start_mhz: number;
+  stop_mhz: number;
+  duration: number;
+  gain: number;
+  created_at: string;
+  duration_s: number | null;
+  num_peaks: number;
+}
+
+export async function listScans(
+  limit = 50, offset = 0,
+): Promise<{ scans: ScanSummary[]; total: number }> {
+  const res = await fetch(`${API}/api/scans?limit=${limit}&offset=${offset}`);
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function getScan(scanId: string): Promise<JobInfo> {
+  const res = await fetch(`${API}/api/scans/${scanId}`);
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+

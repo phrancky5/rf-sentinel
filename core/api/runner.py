@@ -153,6 +153,8 @@ class JobRunner:
         job.duration_s = round(time.time() - t0, 2)
         job.params["peaks"] = peaks
         _emit_job_status(job)
+        from core.api.db import save_scan
+        save_scan(job)
 
     # ── Scan (stitched) ─────────────────────────────────
 
@@ -163,6 +165,7 @@ class JobRunner:
 
         try:
             from core.dsp import compute_waterfall, trim_waterfall, stitch_waterfalls, find_peaks
+            from core.dsp.peaks import find_maxhold_peaks
             from core.dsp.classify import classify_peaks
 
             segments, num_chunks = self._capture_segments(job, "Scan", compute_waterfall, trim_waterfall)
@@ -173,7 +176,10 @@ class JobRunner:
             result = stitch_waterfalls(segments)
 
             _emit(job.id, "Detecting signals...")
-            raw_peaks = find_peaks(result.freqs_mhz, result.mean_psd_db)
+            mean_peaks = find_peaks(result.freqs_mhz, result.mean_psd_db)
+            raw_peaks = find_maxhold_peaks(
+                result.freqs_mhz, result.power_db, mean_peaks,
+            )
             self._log_peaks(job.id, raw_peaks)
             peaks = classify_peaks(result.freqs_mhz, result.mean_psd_db, raw_peaks,
                                    waterfall_db=result.power_db)

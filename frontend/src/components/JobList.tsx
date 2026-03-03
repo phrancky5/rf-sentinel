@@ -46,7 +46,9 @@ function JobCard({ job, selected, onSelect }: {
         </span>
       </div>
       <div className="flex items-center justify-between mt-1">
-        <span className="text-xs text-gray-600 font-mono">{job.id.slice(0, 8)}</span>
+        <span className="text-xs text-gray-600 font-mono">
+          {job.created_at ? new Date(job.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : job.id.slice(0, 8)}
+        </span>
         {job.duration_s !== null && (
           <span className="text-xs text-gray-600">{job.duration_s}s</span>
         )}

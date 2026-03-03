@@ -89,5 +89,5 @@ export function useWebSocket(url: string, onSpectrum?: (data: any) => void) {
 
   const clearLogs = useCallback(() => setLogs([]), []);
 
-  return { connected, logs, clearLogs, jobs };
+  return { connected, logs, clearLogs, jobs, setJobs };
 }

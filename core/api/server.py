@@ -43,6 +43,8 @@ app.include_router(create_routes(runner))
 
 @app.on_event("startup")
 async def _startup() -> None:
+    from core.api.db import init as init_db
+    init_db()
     ws.set_loop(asyncio.get_running_loop())
     set_log_callback(ws.log_callback)
     set_audio_callback(ws.audio_callback)

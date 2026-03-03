@@ -115,6 +115,39 @@ def find_peaks(
     return peaks[:max_peaks]
 
 
+MERGE_PROXIMITY_KHZ = 50.0
+
+
+def find_maxhold_peaks(
+    freqs_mhz: np.ndarray,
+    waterfall_db: np.ndarray,
+    existing: list[SignalPeak],
+    min_snr_db: float = MIN_SNR_DB,
+) -> list[SignalPeak]:
+    """Find peaks in max-hold PSD that aren't already in the existing list.
+
+    Catches brief/intermittent transmissions that get averaged out in the
+    mean PSD.  Returns combined list (existing + new max-hold-only peaks).
+    """
+    max_psd = np.max(waterfall_db, axis=1)
+    maxhold_peaks = find_peaks(freqs_mhz, max_psd, min_snr_db=min_snr_db)
+
+    if not maxhold_peaks:
+        return existing
+    if not existing:
+        return maxhold_peaks
+
+    existing_freqs = np.array([p.freq_mhz for p in existing])
+    merged = list(existing)
+    for pk in maxhold_peaks:
+        dists = np.abs(existing_freqs - pk.freq_mhz) * 1000  # MHz -> kHz
+        if np.min(dists) > MERGE_PROXIMITY_KHZ:
+            merged.append(pk)
+
+    merged.sort(key=lambda p: p.prominence_db, reverse=True)
+    return merged
+
+
 class PsdSmoother:
     """Exponential moving average over consecutive PSD frames (live mode)."""
 
