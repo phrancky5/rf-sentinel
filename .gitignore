@@ -30,6 +30,8 @@ data/*.raw
 data/*.iq
 data/*.npy
 data/*.db
+data/*.db-shm
+data/*.db-wal
 !data/.gitkeep
 
 # Matplotlib output
