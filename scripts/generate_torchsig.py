@@ -33,7 +33,6 @@ import argparse
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from multiprocessing import cpu_count
 
 import numpy as np
 
@@ -50,23 +49,42 @@ CUSTOM_CLASSES = {"cw", "lora", "pocsag", "noise"}
 
 _IDX = {c: i for i, c in enumerate(OUR_CLASSES)}
 
-_TORCHSIG_MAP: dict[str, int] = {
-    "fm": _IDX["fm"],
-    "am-dsb": _IDX["am"], "am-dsb-sc": _IDX["am"],
-    "am-lsb": _IDX["ssb"], "am-usb": _IDX["ssb"],
+# Per-class TorchSig config: generators, bandwidth range (Hz), center freq jitter (fraction)
+_TORCHSIG_CONFIG: dict[str, dict] = {
+    "fm": {
+        "generators": ["fm"],
+        "bw_min": 150_000, "bw_max": 200_000,
+        "center_jitter": 0.05,
+    },
+    "am": {
+        "generators": ["am-dsb", "am-dsb-sc"],
+        "bw_min": 6_000, "bw_max": 10_000,
+        "center_jitter": 0.10,
+    },
+    "ssb": {
+        "generators": ["am-lsb", "am-usb"],
+        "bw_min": 2_000, "bw_max": 3_500,
+        "center_jitter": 0.10,
+    },
+    "nfm": {
+        "generators": ["2fsk", "2gfsk", "2msk", "2gmsk", "4fsk", "4gfsk"],
+        "bw_min": 8_000, "bw_max": 25_000,
+        "center_jitter": 0.10,
+    },
+    "digital": {
+        "generators": [
+            "ook", "4ask", "8ask", "16ask", "32ask", "64ask",
+            "bpsk", "qpsk", "8psk", "16psk", "32psk", "64psk",
+            "16qam", "32qam", "32qam_cross", "64qam", "128qam_cross",
+            "256qam", "512qam_cross", "1024qam",
+            "ofdm-64", "ofdm-72", "ofdm-128", "ofdm-180", "ofdm-256",
+            "ofdm-300", "ofdm-512", "ofdm-600", "ofdm-900", "ofdm-1024",
+            "ofdm-1200", "ofdm-2048",
+        ],
+        "bw_min": 10_000, "bw_max": int(SAMPLE_RATE * 0.45),
+        "center_jitter": 0.05,
+    },
 }
-for cls in (
-    "ook", "4ask", "8ask", "16ask", "32ask", "64ask",
-    "bpsk", "qpsk", "8psk", "16psk", "32psk", "64psk",
-    "16qam", "32qam", "32qam_cross", "64qam", "128qam_cross",
-    "256qam", "512qam_cross", "1024qam",
-    "ofdm-64", "ofdm-72", "ofdm-128", "ofdm-180", "ofdm-256",
-    "ofdm-300", "ofdm-512", "ofdm-600", "ofdm-900", "ofdm-1024",
-    "ofdm-1200", "ofdm-2048",
-):
-    _TORCHSIG_MAP[cls] = _IDX["digital"]
-for cls in ("2fsk", "2gfsk", "2msk", "2gmsk", "4fsk", "4gfsk"):
-    _TORCHSIG_MAP[cls] = _IDX["nfm"]
 
 
 # --- Pure numpy protocol generators (TorchSig doesn't model these) ---
@@ -205,44 +223,43 @@ def _generate_protocol_samples(
 
 
 def _torchsig_worker(
-    worker_id: int,
-    target_per_class: dict[int, int],
+    cls_name: str,
+    cls_idx: int,
+    count: int,
     impairment_level: int,
     seed: int,
-) -> dict[int, list[np.ndarray]]:
-    """Worker process: creates own TorchSig dataset, iterates and collects samples."""
+) -> tuple[int, list[np.ndarray]]:
+    """Generate `count` samples of one class using targeted signal_generators."""
     from torchsig.utils.defaults import default_dataset
 
+    cfg = _TORCHSIG_CONFIG[cls_name]
+    jitter = cfg["center_jitter"]
     dataset = default_dataset(
         impairment_level=impairment_level,
+        signal_generators=cfg["generators"],
         num_iq_samples_dataset=N_IQ,
         sample_rate=float(SAMPLE_RATE),
         num_signals_min=1,
-        num_signals_max=1,
+        num_signals_max=3,
         snr_db_min=-5.0,
         snr_db_max=30.0,
         signal_duration_in_samples_min=int(N_IQ * 0.8),
         signal_duration_in_samples_max=N_IQ,
-        bandwidth_min=5_000,
-        bandwidth_max=int(SAMPLE_RATE * 0.45),
-        signal_center_freq_min=int(-SAMPLE_RATE * 0.05),
-        signal_center_freq_max=int(SAMPLE_RATE * 0.05),
+        bandwidth_min=cfg["bw_min"],
+        bandwidth_max=cfg["bw_max"],
+        signal_center_freq_min=int(-SAMPLE_RATE * jitter),
+        signal_center_freq_max=int(SAMPLE_RATE * jitter),
         frequency_min=int(-SAMPLE_RATE * 0.5),
         frequency_max=int(SAMPLE_RATE * 0.5),
     )
 
-    buckets: dict[int, list[np.ndarray]] = {i: [] for i in target_per_class}
+    samples: list[np.ndarray] = []
     it = iter(dataset)
-    total_needed = sum(target_per_class.values())
-    max_attempts = total_needed * 20
     skipped = 0
-    kept = 0
     t_start = time.time()
     last_log = 0
 
-    for _ in range(max_attempts):
-        if all(len(buckets[i]) >= target_per_class[i] for i in target_per_class):
-            break
+    while len(samples) < count:
         try:
             signal = next(it)
         except StopIteration:
@@ -250,99 +267,66 @@ def _torchsig_worker(
             signal = next(it)
         except (ValueError, RuntimeError):
             skipped += 1
-            continue
-
-        try:
-            class_name = signal.component_signals[0].to_dict()["_metadata"]["class_name"]
-        except (IndexError, KeyError, AttributeError):
-            skipped += 1
-            continue
-
-        cls_idx = _TORCHSIG_MAP.get(class_name)
-        if cls_idx is None or cls_idx not in target_per_class:
-            continue
-        if len(buckets[cls_idx]) >= target_per_class[cls_idx]:
+            if skipped > count * 5:
+                break
             continue
 
         iq = np.asarray(signal.data, dtype=np.complex64)
         if len(iq) > N_IQ:
             iq = iq[(len(iq) - N_IQ) // 2:][:N_IQ]
         elif len(iq) < N_IQ:
+            skipped += 1
             continue
 
-        buckets[cls_idx].append(_unit_power(iq))
-        kept += 1
+        samples.append(_unit_power(iq))
 
-        if kept - last_log >= 500:
-            last_log = kept
-            done = sum(min(len(buckets[i]), target_per_class[i]) for i in target_per_class)
+        if len(samples) - last_log >= 500:
+            last_log = len(samples)
             elapsed = time.time() - t_start
-            rate = done / elapsed if elapsed > 0 else 0
-            eta_s = (total_needed - done) / rate if rate > 0 else 0
-            counts = {OUR_CLASSES[i]: len(b) for i, b in buckets.items()}
-            tag = f"W{worker_id}" if worker_id > 0 else "TorchSig"
-            print(f"    {tag}: {done}/{total_needed} ({done*100//total_needed}%) "
-                  f"ETA {eta_s/60:.1f}m — {counts}"
+            rate = len(samples) / elapsed if elapsed > 0 else 0
+            eta_s = (count - len(samples)) / rate if rate > 0 else 0
+            print(f"    {cls_name}: {len(samples)}/{count} "
+                  f"({len(samples)*100//count}%) ETA {eta_s:.0f}s"
                   + (f" [{skipped} skipped]" if skipped else ""),
                   flush=True)
 
-    return buckets
+    return cls_idx, samples
 
 
 def _generate_torchsig_samples(
-    target_per_class: dict[int, int],
+    targets: dict[str, int],
     impairment_level: int,
     seed: int,
     n_workers: int = 1,
 ) -> dict[int, list[np.ndarray]]:
-    """Spawn workers to generate TorchSig samples in parallel."""
-    total_needed = sum(target_per_class.values())
-
-    # Split targets evenly across workers
-    worker_targets = []
-    for w in range(n_workers):
-        wt = {}
-        for cls_idx, count in target_per_class.items():
-            base = count // n_workers
-            extra = 1 if w < (count % n_workers) else 0
-            wt[cls_idx] = base + extra
-        worker_targets.append(wt)
-
-    print(f"    Spawning {n_workers} TorchSig worker(s) for {total_needed} total samples...")
+    """Generate TorchSig samples per class in parallel (one worker per class)."""
+    total_needed = sum(targets.values())
+    n_classes = len(targets)
+    actual_workers = min(n_workers, n_classes)
+    print(f"    Generating {total_needed} TorchSig samples "
+          f"({n_classes} classes, {actual_workers} workers)...")
     t_start = time.time()
 
-    merged: dict[int, list[np.ndarray]] = {i: [] for i in target_per_class}
+    merged: dict[int, list[np.ndarray]] = {}
+    jobs = [(cls_name, _IDX[cls_name], count, impairment_level, seed + i * 1000)
+            for i, (cls_name, count) in enumerate(targets.items())]
 
-    if n_workers == 1:
-        result = _torchsig_worker(0, worker_targets[0], impairment_level, seed)
-        for cls_idx, samples in result.items():
-            merged[cls_idx].extend(samples)
+    if actual_workers <= 1:
+        for args in jobs:
+            cls_idx, samples = _torchsig_worker(*args)
+            merged[cls_idx] = samples
     else:
-        with ProcessPoolExecutor(max_workers=n_workers) as pool:
-            futures = {}
-            for w in range(n_workers):
-                f = pool.submit(
-                    _torchsig_worker, w, worker_targets[w],
-                    impairment_level, seed + w * 1000,
-                )
-                futures[f] = w
-
+        with ProcessPoolExecutor(max_workers=actual_workers) as pool:
+            futures = {pool.submit(_torchsig_worker, *args): args[0] for args in jobs}
             for f in as_completed(futures):
-                w = futures[f]
-                result = f.result()
-                counts = {OUR_CLASSES[i]: len(s) for i, s in result.items()}
-                print(f"    Worker {w} done: {counts}")
-                for cls_idx, samples in result.items():
-                    merged[cls_idx].extend(samples)
+                cls_name = futures[f]
+                cls_idx, samples = f.result()
+                merged[cls_idx] = samples
+                print(f"    {cls_name} done: {len(samples)} samples")
 
     elapsed = time.time() - t_start
     total_got = sum(len(s) for s in merged.values())
-    print(f"    TorchSig done in {elapsed:.0f}s ({total_got} samples, {n_workers} workers)")
-
-    # Trim to exact target counts
-    for cls_idx in merged:
-        if len(merged[cls_idx]) > target_per_class[cls_idx]:
-            merged[cls_idx] = merged[cls_idx][:target_per_class[cls_idx]]
+    print(f"    TorchSig done in {elapsed:.0f}s ({total_got} samples)")
 
     return merged
 
@@ -417,10 +401,7 @@ def generate(
 
     # 3) TorchSig classes
     if requested_torchsig:
-        torchsig_targets = {
-            _IDX[c]: samples_per_class
-            for c in requested_torchsig
-        }
+        torchsig_targets = {c: samples_per_class for c in requested_torchsig}
         names = ", ".join(sorted(requested_torchsig))
         print(f"  Generating TorchSig classes ({names})...")
         ts_buckets = _generate_torchsig_samples(
@@ -429,9 +410,9 @@ def generate(
 
         for cls_idx, samples in ts_buckets.items():
             actual = len(samples)
-            target = torchsig_targets[cls_idx]
-            if actual < target:
-                print(f"    WARNING: {OUR_CLASSES[cls_idx]} only got {actual}/{target}")
+            cls_name = OUR_CLASSES[cls_idx]
+            if actual < torchsig_targets[cls_name]:
+                print(f"    WARNING: {cls_name} only got {actual}/{torchsig_targets[cls_name]}")
             for s in samples:
                 all_iq.append(s)
                 all_labels.append(cls_idx)
