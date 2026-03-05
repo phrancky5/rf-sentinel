@@ -1,6 +1,6 @@
 """Convert RadioML 2018.01a HDF5 to training .npz format.
 
-Maps 24 RadioML classes to our 12-class scheme and filters to useful SNR range.
+Maps 24 RadioML classes to our 8-class scheme and filters to useful SNR range.
 
 Usage:
     python scripts/convert_radioml.py \
@@ -33,27 +33,28 @@ RADIOML_TO_OURS = {
     "FM": "fm",
     "AM-DSB-WC": "am",
     "AM-DSB-SC": "am",
-    "AM-SSB-WC": "ssb",
-    "AM-SSB-SC": "ssb",
-    "OOK": "cw",
     "GMSK": "nfm",
-    "OQPSK": "digital",
-    "BPSK": "digital",
-    "QPSK": "digital",
-    "8PSK": "digital",
-    "16PSK": "digital",
-    "32PSK": "digital",
-    "4ASK": "digital",
-    "8ASK": "digital",
-    "16APSK": "digital",
-    "32APSK": "digital",
-    "64APSK": "digital",
-    "128APSK": "digital",
-    "16QAM": "digital",
-    "32QAM": "digital",
-    "64QAM": "digital",
-    "128QAM": "digital",
-    "256QAM": "digital",
+    "OOK": "tdma",
+    "OQPSK": "tdma",
+    "BPSK": "tdma",
+    "QPSK": "tdma",
+    "8PSK": "tdma",
+    "16PSK": "tdma",
+    "32PSK": "tdma",
+    "4ASK": "tdma",
+    "8ASK": "tdma",
+    "16APSK": "tdma",
+    "32APSK": "tdma",
+    "64APSK": "tdma",
+    "128APSK": "tdma",
+    "16QAM": "tdma",
+    "32QAM": "tdma",
+    "64QAM": "tdma",
+    "128QAM": "tdma",
+    "256QAM": "tdma",
+    # SSB dropped — no HF reception with RTL-SDR
+    # "AM-SSB-WC": ...,
+    # "AM-SSB-SC": ...,
 }
 
 
@@ -91,7 +92,9 @@ def main():
         if not snr_mask[i]:
             continue
         rml_cls = RADIOML_CLASSES[y_idx[i]]
-        our_cls = RADIOML_TO_OURS[rml_cls]
+        our_cls = RADIOML_TO_OURS.get(rml_cls)
+        if our_cls is None:
+            continue
         bins[our_cls].append(i)
 
     print("\nAvailable per class:")

@@ -27,10 +27,10 @@ CLASS_MAP = {
     "lorasf7": "lora",
     "lorasf12": "lora",
     "noise": "noise",
-    "zigbee": "digital",
-    "sigfox": "digital",
-    "80211ah": "digital",
-    "sunofdm": "digital",
+    "zigbee": "tdma",
+    "sigfox": "tdma",
+    "80211ah": "ofdm",
+    "sunofdm": "ofdm",
 }
 
 

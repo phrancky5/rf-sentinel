@@ -83,12 +83,12 @@ def _extract_snippet(
     return channels, snippet
 
 
-def _dump_snippet(iq: np.ndarray, channels: np.ndarray, freq_hz: float, power_db: float):
+def _dump_snippet(iq: np.ndarray, freq_hz: float, power_db: float):
     os.makedirs(DEBUG_DIR, exist_ok=True)
     freq_mhz = freq_hz / 1e6
     ts = int(time.time())
     path = os.path.join(DEBUG_DIR, f"{_capture_label}_{ts}_{freq_mhz:.2f}MHz_{power_db:.0f}dB.npz")
-    np.savez_compressed(path, iq=iq, channels=channels, freq_mhz=freq_mhz)
+    np.savez_compressed(path, iq=iq, freq_mhz=freq_mhz)
     logger.info("Debug snippet saved: %s", path)
 
 
@@ -104,8 +104,8 @@ def _maybe_dump_snippet(snippet_data: list[tuple[np.ndarray, np.ndarray, float, 
         best = min(snippet_data, key=lambda s: abs(s[2] - _capture_vfo_hz))
     else:
         best = snippet_data[0]
-    snippet_iq, channels, freq_hz, power_db = best
-    _dump_snippet(snippet_iq, channels, freq_hz, power_db)
+    snippet_iq, _channels, freq_hz, power_db = best
+    _dump_snippet(snippet_iq, freq_hz, power_db)
     _debug_count += 1
     if _debug_count >= _DEBUG_MAX:
         disable_capture()

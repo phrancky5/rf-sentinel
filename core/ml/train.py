@@ -1,8 +1,11 @@
-"""Train signal classifier with stratified k-fold CV and export to ONNX.
+"""Train signal classifier with rotating validation and export to ONNX.
+
+One model is trained continuously, cycling which fold is held out for
+validation.  After all rotations the model has trained on every sample.
 
 Usage:
-    python -m core.ml.train --data data/training.npz data/radioml.npz data/subghz.npz \
-        [--epochs 50] [--folds 5] [--output data/models/classifier.onnx]
+    python -m core.ml.train --data data/radioml.npz data/subghz.npz data/synthetic.npz \
+        [--epochs 50] [--rotations 5] [--output data/models/classifier.onnx]
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ import torch
 import torch.nn as nn
 from sklearn.model_selection import StratifiedKFold
 from torch.optim import Adam
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LambdaLR, SequentialLR
 from torch.utils.data import DataLoader, Subset
 
 from .dataset import IQDataset, augment_channels
@@ -67,14 +70,31 @@ def train(
     print(f"\nHeld-out test set: {len(test_indices)} samples")
     print(f"Train+val pool:   {len(trainval_indices)} samples")
 
-    # --- Stratified K-Fold on train+val ---
+    # --- Rotating validation: one model, cycle which fold is held out ---
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
-    fold_results = []
+    splits = list(skf.split(trainval_indices, trainval_labels))
 
-    for fold, (train_rel, val_rel) in enumerate(skf.split(trainval_indices, trainval_labels)):
-        fold_start = time.time()
+    model = SignalCNN(dropout=dropout).to(device)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"Model: {n_params:,} parameters (dropout={dropout})")
+
+    total_epochs = epochs * n_folds
+    warmup_epochs = min(5, epochs // 5)
+    optimizer = Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    warmup_sched = LambdaLR(optimizer, lr_lambda=lambda e: min(1.0, (e + 1) / max(1, warmup_epochs)))
+    cosine_sched = CosineAnnealingWarmRestarts(optimizer, T_0=epochs, T_mult=1)
+    scheduler = SequentialLR(optimizer, [warmup_sched, cosine_sched], milestones=[warmup_epochs])
+    criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+    scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
+    mixup_alpha = 0.4
+
+    best_acc = 0.0
+    best_state = None
+    global_epoch = 0
+
+    for fold, (train_rel, val_rel) in enumerate(splits):
         print(f"\n{'='*60}")
-        print(f"  FOLD {fold + 1}/{n_folds}")
+        print(f"  ROTATION {fold + 1}/{n_folds} (val split {fold + 1})")
         print(f"{'='*60}")
 
         train_idx = trainval_indices[train_rel]
@@ -88,21 +108,9 @@ def train(
         val_loader = DataLoader(val_set, batch_size=batch_size,
                                 num_workers=0, pin_memory=True)
 
-        model = SignalCNN(dropout=dropout).to(device)
-        if fold == 0:
-            n_params = sum(p.numel() for p in model.parameters())
-            print(f"Model: {n_params:,} parameters (dropout={dropout})")
-
-        optimizer = Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-        scheduler = CosineAnnealingLR(optimizer, T_max=epochs)
-        criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
-
-        best_acc = 0.0
-        best_state = None
-        scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
-
         for epoch in range(epochs):
-            # Train
+            global_epoch += 1
+
             model.train()
             train_loss = 0.0
             train_correct = 0
@@ -110,10 +118,16 @@ def train(
             for batch_iq, batch_labels in train_loader:
                 batch_iq = batch_iq.to(device)
                 batch_labels = batch_labels.to(device)
+
+                # Mixup
+                lam = np.random.beta(mixup_alpha, mixup_alpha)
+                idx = torch.randperm(batch_iq.size(0), device=device)
+                mixed_iq = lam * batch_iq + (1 - lam) * batch_iq[idx]
+
                 optimizer.zero_grad()
                 with torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
-                    logits = model(batch_iq)
-                    loss = criterion(logits, batch_labels)
+                    logits = model(mixed_iq)
+                    loss = lam * criterion(logits, batch_labels) + (1 - lam) * criterion(logits, batch_labels[idx])
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
@@ -122,7 +136,6 @@ def train(
                 train_total += len(batch_labels)
             scheduler.step()
 
-            # Validate
             model.eval()
             val_correct = 0
             val_total = 0
@@ -148,11 +161,11 @@ def train(
                 acc = confusion[c][c] / max(1, c_total)
                 per_class += f" {ML_CLASSES[c]}={acc:.0%}"
 
-            print(f"  [{epoch+1:3d}/{epochs}] loss={avg_loss:.4f}  train={train_acc:.1%}  val={val_acc:.1%} |{per_class}")
+            print(f"  [{global_epoch:3d}/{total_epochs}] loss={avg_loss:.4f}  train={train_acc:.1%}  val={val_acc:.1%} |{per_class}")
 
             if epoch == epochs - 1:
                 header = "     " + "  ".join(f"{ML_CLASSES[c]:>5s}" for c in range(N_CLASSES))
-                print(f"\n  Confusion matrix (fold {fold+1}):\n  {header}")
+                print(f"\n  Confusion matrix (rotation {fold+1}):\n  {header}")
                 for r in range(N_CLASSES):
                     row = "  ".join(f"{confusion[r][c]:5d}" for c in range(N_CLASSES))
                     print(f"  {ML_CLASSES[r]:>5s} {row}")
@@ -161,32 +174,18 @@ def train(
                 best_acc = val_acc
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
-            if (epoch + 1) % 10 == 0:
-                ckpt = output_path.replace(".onnx", f"_fold{fold+1}_e{epoch+1}.pt")
+            if global_epoch % 10 == 0:
+                ckpt = output_path.replace(".onnx", f"_e{global_epoch}.pt")
                 torch.save(model.state_dict(), ckpt)
                 print(f"  Checkpoint: {ckpt} (val={val_acc:.1%})")
 
-        fold_results.append((best_acc, best_state))
-        fold_elapsed = time.time() - fold_start
-        print(f"  Fold {fold + 1} best val accuracy: {best_acc:.1%} ({fold_elapsed:.0f}s)")
+        print(f"  Rotation {fold + 1} best val so far: {best_acc:.1%}")
 
-        # Checkpoint best model so far
-        checkpoint_path = output_path.replace(".onnx", f"_fold{fold+1}.pt")
-        torch.save(best_state, checkpoint_path)
-        print(f"  Checkpoint saved: {checkpoint_path}")
-
-    # --- Select best fold ---
-    fold_accs = [acc for acc, _ in fold_results]
-    mean_acc = np.mean(fold_accs)
-    std_acc = np.std(fold_accs)
-    best_fold = int(np.argmax(fold_accs))
     print(f"\n{'='*60}")
-    print(f"K-Fold results: {' '.join(f'{a:.1%}' for a in fold_accs)}")
-    print(f"Mean: {mean_acc:.1%} ± {std_acc:.1%}")
-    print(f"Using fold {best_fold + 1} (best: {fold_accs[best_fold]:.1%})")
+    print(f"Best validation accuracy: {best_acc:.1%}")
 
     model = SignalCNN(dropout=dropout).cpu()
-    model.load_state_dict(fold_results[best_fold][1])
+    model.load_state_dict(best_state)
     model.eval()
 
     # --- Evaluate on held-out test set ---
@@ -296,7 +295,7 @@ def main():
     parser.add_argument("--data", type=str, nargs="+", required=True,
                         help=".npz files from generate_torchsig.py")
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--folds", type=int, default=5)
+    parser.add_argument("--rotations", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
@@ -307,7 +306,7 @@ def main():
     train(
         data_paths=args.data,
         epochs=args.epochs,
-        n_folds=args.folds,
+        n_folds=args.rotations,
         batch_size=args.batch_size,
         lr=args.lr,
         weight_decay=args.weight_decay,

@@ -8,20 +8,16 @@ from .bands import lookup_band
 
 FM_BROADCAST = "fm_broadcast"
 NARROWBAND_FM = "narrowband_fm"
+OFDM = "ofdm"
+TDMA = "tdma"
 DIGITAL = "digital"
 AM_BROADCAST = "am_broadcast"
-SSB = "ssb"
 CARRIER = "carrier"
-DMR = "dmr"
-P25 = "p25"
-DSTAR = "dstar"
 LORA = "lora"
-POCSAG = "pocsag"
+ADSB = "adsb"
 AVIATION = "aviation"
 HAM = "ham"
 ISM = "ism"
-GSM = "gsm"
-ADSB = "adsb"
 UNKNOWN = "unknown"
 
 ML_CONFIDENCE_THRESHOLD = 0.5
@@ -29,20 +25,16 @@ ML_CONFIDENCE_THRESHOLD = 0.5
 SHORT_LABELS = {
     FM_BROADCAST: "FM",
     NARROWBAND_FM: "NFM",
+    OFDM: "OFDM",
+    TDMA: "TDMA",
     DIGITAL: "DIG",
     AM_BROADCAST: "AM",
-    SSB: "SSB",
     CARRIER: "CW",
-    DMR: "DMR",
-    P25: "P25",
-    DSTAR: "DST",
     LORA: "LoRa",
-    POCSAG: "PGR",
+    ADSB: "ADS-B",
     AVIATION: "AIR",
     HAM: "HAM",
     ISM: "ISM",
-    GSM: "GSM",
-    ADSB: "ADS",
     UNKNOWN: "",
 }
 
@@ -147,7 +139,7 @@ def _apply_temporal(
     """
     # Very low duty cycle = intermittent transmission (PTT voice, bursty data)
     if duty_cycle < 0.4 and power_var > 5.0:
-        if signal_type in (FM_BROADCAST, AM_BROADCAST, DIGITAL, UNKNOWN):
+        if signal_type in (FM_BROADCAST, AM_BROADCAST, OFDM, TDMA, UNKNOWN):
             if occ_bw <= 35:
                 return NARROWBAND_FM, 0.65
             return NARROWBAND_FM, 0.55
@@ -161,26 +153,22 @@ def _apply_temporal(
     if duty_cycle > 0.9 and power_var < 3.0:
         if signal_type == FM_BROADCAST:
             confidence = min(0.95, confidence + 0.05)
-        elif signal_type == DIGITAL:
+        elif signal_type in (OFDM, TDMA):
             confidence = min(0.90, confidence + 0.05)
 
     return signal_type, confidence
 
 
-_NFM_COMPATIBLE = {AVIATION, HAM, ISM, NARROWBAND_FM, DMR, P25, DSTAR}
+_NFM_COMPATIBLE = {AVIATION, HAM, ISM, NARROWBAND_FM, TDMA}
 
 _ML_CLASS_MAP = {
     "fm": FM_BROADCAST,
     "am": AM_BROADCAST,
-    "ssb": SSB,
-    "cw": CARRIER,
     "nfm": NARROWBAND_FM,
-    "dmr": DMR,
-    "p25": P25,
-    "dstar": DSTAR,
+    "ofdm": OFDM,
+    "tdma": TDMA,
     "lora": LORA,
-    "pocsag": POCSAG,
-    "digital": DIGITAL,
+    "adsb": ADSB,
     "noise": None,
 }
 
@@ -261,7 +249,7 @@ def _classify_one(
         signal_type = NARROWBAND_FM
         confidence = 0.6 + (0.4 - flatness) * 0.5
     elif flatness > 0.5 and steepness > 2:
-        signal_type = DIGITAL
+        signal_type = OFDM if occ_bw > 100 else TDMA
         confidence = min(0.85, 0.5 + steepness * 0.05 + flatness * 0.2)
     elif 8 <= occ_bw <= 15 and flatness > 0.3:
         signal_type = AM_BROADCAST

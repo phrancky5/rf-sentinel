@@ -22,10 +22,12 @@ BANDS: list[BandInfo] = [
     BandInfo(144.0, 148.0, "2m Ham", "ham", "HAM"),
     BandInfo(430.0, 440.0, "70cm Ham", "ham", "HAM"),
     BandInfo(1240.0, 1300.0, "23cm Ham", "ham", "HAM"),
+    BandInfo(174.0, 230.0, "DAB+", "ofdm", "DAB"),
+    BandInfo(380.0, 400.0, "TETRA", "tdma", "TETRA"),
     BandInfo(446.0, 446.2, "PMR446", "narrowband_fm", "PMR"),
     BandInfo(433.05, 434.79, "433 ISM", "ism", "ISM"),
     BandInfo(863.0, 870.0, "868 ISM", "ism", "ISM"),
-    BandInfo(935.0, 960.0, "GSM 900 DL", "gsm", "GSM"),
+    BandInfo(935.0, 960.0, "GSM 900 DL", "tdma", "GSM"),
     BandInfo(1089.0, 1091.0, "ADS-B", "adsb", "ADS"),
 ]
 
