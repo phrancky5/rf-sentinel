@@ -1,6 +1,6 @@
 """Shared feature extraction for training and inference.
 
-12 channels total:
+15 channels total:
   Time-domain (from 100 kHz bandpass-filtered IQ):
     0: I
     1: Q
@@ -16,6 +16,10 @@
   Autocorrelation (bandpass-filtered IQ → ACF):
     10: Full band
     11: 200 kHz filtered
+  AM/SSB/FM discrimination:
+    12: Spectral symmetry — |S(peak+k) - S(peak-k)|, low for AM, high for SSB
+    13: Envelope variance — sliding window variance of |IQ| (low for FM/NFM)
+    14: Bandwidth CDF — cumulative energy from spectral peak outward
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.signal import decimate as sp_decimate
 
-N_CHANNELS = 12
+N_CHANNELS = 15
 N_IQ = 1024
 
 ML_SAMPLE_RATE = 1.024e6
@@ -76,6 +80,42 @@ def _autocorrelation(iq: np.ndarray) -> np.ndarray:
     return _normalize(acf)
 
 
+def _spectral_symmetry(iq: np.ndarray) -> np.ndarray:
+    S = np.abs(np.fft.fftshift(np.fft.fft(iq, n=N_IQ)))
+    peak = int(np.argmax(S))
+    max_r = min(peak, N_IQ - 1 - peak)
+    sym = np.zeros(N_IQ, dtype=np.float32)
+    for k in range(1, max_r + 1):
+        sym[k] = abs(S[peak + k] - S[peak - k])
+    return _normalize(sym)
+
+
+def _envelope_variance(iq: np.ndarray, win: int = _INST_FREQ_VAR_WINDOW) -> np.ndarray:
+    amp = np.abs(iq[:N_IQ]) if len(iq) > N_IQ else np.abs(iq)
+    padded = np.pad(amp, (win // 2, win // 2), mode="edge")
+    cs = np.cumsum(padded)
+    cs2 = np.cumsum(padded ** 2)
+    mu = (cs[win:] - cs[:-win]) / win
+    mu2 = (cs2[win:] - cs2[:-win]) / win
+    var = (mu2 - mu ** 2)[:N_IQ]
+    return _normalize(var)
+
+
+def _bandwidth_cdf(iq: np.ndarray) -> np.ndarray:
+    S = np.abs(np.fft.fftshift(np.fft.fft(iq, n=N_IQ))) ** 2
+    peak = int(np.argmax(S))
+    max_r = min(peak, N_IQ - 1 - peak)
+    cdf = np.zeros(N_IQ, dtype=np.float32)
+    total = S.sum() + 1e-12
+    cumul = S[peak]
+    cdf[0] = cumul / total
+    for k in range(1, max_r + 1):
+        cumul += S[peak + k] + S[peak - k]
+        cdf[k] = cumul / total
+    cdf[max_r + 1:] = 1.0
+    return cdf
+
+
 def iq_to_channels(iq: np.ndarray, sample_rate: float = ML_SAMPLE_RATE) -> np.ndarray:
     """Convert complex IQ to (N_CHANNELS, N_IQ) float32 feature channels."""
 
@@ -120,6 +160,10 @@ def iq_to_channels(iq: np.ndarray, sample_rate: float = ML_SAMPLE_RATE) -> np.nd
     acf_full = _autocorrelation(iq[:N_IQ] if len(iq) > N_IQ else iq)
     acf_200k = _autocorrelation(_bandpass_filter(iq, 200e3, sample_rate))
 
+    spec_sym = _spectral_symmetry(iq)
+    env_var = _envelope_variance(iq)
+    bw_cdf = _bandwidth_cdf(iq)
+
     return np.stack([
         i_ch, q_ch,
         inst_freq_norm,
@@ -129,4 +173,7 @@ def iq_to_channels(iq: np.ndarray, sample_rate: float = ML_SAMPLE_RATE) -> np.nd
         *spec_channels,
         acf_full,
         acf_200k,
+        spec_sym,
+        env_var,
+        bw_cdf,
     ])

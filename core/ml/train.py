@@ -126,8 +126,7 @@ def train(
             model.eval()
             val_correct = 0
             val_total = 0
-            class_correct = np.zeros(N_CLASSES)
-            class_total = np.zeros(N_CLASSES)
+            confusion = np.zeros((N_CLASSES, N_CLASSES), dtype=int)
             with torch.no_grad(), torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
                 for batch_iq, batch_labels in val_loader:
                     batch_iq = batch_iq.to(device)
@@ -136,10 +135,8 @@ def train(
                     preds = logits.argmax(1)
                     val_correct += (preds == batch_labels).sum().item()
                     val_total += len(batch_labels)
-                    for c in range(N_CLASSES):
-                        mask = batch_labels == c
-                        class_total[c] += mask.sum().item()
-                        class_correct[c] += (preds[mask] == c).sum().item()
+                    for true, pred in zip(batch_labels.cpu().numpy(), preds.cpu().numpy()):
+                        confusion[true][pred] += 1
 
             train_acc = train_correct / max(1, train_total)
             val_acc = val_correct / max(1, val_total)
@@ -147,14 +144,27 @@ def train(
 
             per_class = ""
             for c in range(N_CLASSES):
-                acc = class_correct[c] / max(1, class_total[c])
+                c_total = confusion[c].sum()
+                acc = confusion[c][c] / max(1, c_total)
                 per_class += f" {ML_CLASSES[c]}={acc:.0%}"
 
             print(f"  [{epoch+1:3d}/{epochs}] loss={avg_loss:.4f}  train={train_acc:.1%}  val={val_acc:.1%} |{per_class}")
 
+            if epoch == epochs - 1:
+                header = "     " + "  ".join(f"{ML_CLASSES[c]:>5s}" for c in range(N_CLASSES))
+                print(f"\n  Confusion matrix (fold {fold+1}):\n  {header}")
+                for r in range(N_CLASSES):
+                    row = "  ".join(f"{confusion[r][c]:5d}" for c in range(N_CLASSES))
+                    print(f"  {ML_CLASSES[r]:>5s} {row}")
+
             if val_acc > best_acc:
                 best_acc = val_acc
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+
+            if (epoch + 1) % 10 == 0:
+                ckpt = output_path.replace(".onnx", f"_fold{fold+1}_e{epoch+1}.pt")
+                torch.save(model.state_dict(), ckpt)
+                print(f"  Checkpoint: {ckpt} (val={val_acc:.1%})")
 
         fold_results.append((best_acc, best_state))
         fold_elapsed = time.time() - fold_start

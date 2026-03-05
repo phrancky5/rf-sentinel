@@ -24,20 +24,19 @@ RESOLUTION_GROUPS = [
     ("200 kHz",      [(7, "Spectrum"), (11, "ACF 200k")]),
     ("100 kHz",      [(8, "Spectrum")]),
     ("25 kHz",       [(9, "Spectrum")]),
+    ("Discrim",      [(12, "Spec Symmetry"), (13, "Env Variance"), (14, "BW CDF")]),
 ]
 
 DATASETS = [
     "data/radioml.npz",
     "data/subghz.npz",
-    "data/synthetic_5k.npz",
-    "data/synthetic_custom.npz",
+    "data/synthetic.npz",
 ]
 
 DS_COLORS = {
     "radioml": "tab:green",
     "subghz": "tab:orange",
-    "synthetic_5k": "tab:red",
-    "synthetic_custom": "tab:purple",
+    "synthetic": "tab:red",
 }
 
 CLASS_COLORS = {
@@ -46,9 +45,6 @@ CLASS_COLORS = {
     "ssb": "#4363d8",
     "cw": "#f58231",
     "nfm": "#911eb4",
-    "dmr": "#42d4f4",
-    "p25": "#f032e6",
-    "dstar": "#bfef45",
     "lora": "#fabed4",
     "pocsag": "#469990",
     "digital": "#dcbeff",
@@ -199,8 +195,9 @@ def plot_live_grid(live_groups):
         return
 
     groups_str = ", ".join(f"{k}({len(v)})" for k, v in live_groups.items())
+    name = list(live_groups.keys())[0] if len(live_groups) == 1 else "live"
     _make_figure(sample_rows, f"Live SDR snippets — {groups_str}",
-                 os.path.join(OUT_DIR, "live_snippets.png"))
+                 os.path.join(OUT_DIR, f"{name}_snippets.png"))
 
 
 def plot_class_comparison(cls, live_groups, include_live):
