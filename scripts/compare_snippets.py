@@ -15,7 +15,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 sys.path.insert(0, ".")
-from core.ml.dataset import DATA_CLASSES
 from core.ml.features import N_CHANNELS, N_IQ, iq_to_channels
 from core.ml.model import ML_CLASSES
 
@@ -85,7 +84,7 @@ def load_live_snippets(path):
 def load_training_samples(npz_path, class_name, n=N_SAMPLES):
     if not os.path.exists(npz_path):
         return []
-    class_idx = DATA_CLASSES.index(class_name) if class_name in DATA_CLASSES else -1
+    class_idx = ML_CLASSES.index(class_name) if class_name in ML_CLASSES else -1
     if class_idx < 0:
         return []
     data = np.load(npz_path)

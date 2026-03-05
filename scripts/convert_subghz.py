@@ -1,7 +1,7 @@
 """Convert Sub-GHz IQ dataset (.mat files) to training .npz format.
 
 Reads .mat files from the Sub-GHz IQ dataset, slices them into 1024-sample
-windows, maps signal types to our 13-class scheme, and saves as .npz.
+windows, maps signal types to our 9-class scheme, and saves as .npz.
 
 Usage:
     python scripts/convert_subghz.py \

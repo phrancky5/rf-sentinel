@@ -1,24 +1,17 @@
 """Generate training data using TorchSig + custom protocol generators.
 
 Runs inside Docker where TorchSig is available. Protocol-specific signals
-(DMR, P25, D-STAR, POCSAG, CW) use pure numpy generators since
-TorchSig doesn't model these protocols.
+(POCSAG, CW, LoRa) use pure numpy generators since TorchSig doesn't
+model these protocols.
 
 Usage (from project root):
     docker build -t torchsig-gpu -f docker/Dockerfile.torchsig-gpu .
 
-    # All classes at once (original behavior):
+    # All classes at once:
     docker run --rm --gpus all -v ./data:/data -v ./scripts:/scripts torchsig-gpu \
         python /scripts/generate_torchsig.py --output /data/synthetic.npz
 
-    # Per-class parallel runs (launch each in a separate terminal):
-    docker run --rm --gpus all -v ./data:/data -v ./scripts:/scripts torchsig-gpu \
-        python /scripts/generate_torchsig.py --classes fm --output /data/synthetic_fm.npz
-    docker run --rm --gpus all -v ./data:/data -v ./scripts:/scripts torchsig-gpu \
-        python /scripts/generate_torchsig.py --classes am --output /data/synthetic_am.npz
-    # ... etc for ssb, nfm, digital
-
-    # Custom protocols (fast, single run):
+    # Custom protocols only (fast, no TorchSig needed):
     docker run --rm --gpus all -v ./data:/data -v ./scripts:/scripts torchsig-gpu \
         python /scripts/generate_torchsig.py --classes custom --output /data/synthetic_custom.npz
 
@@ -28,13 +21,10 @@ Classes (indices match ML_CLASSES order):
     2  ssb      Single sideband (USB/LSB)
     3  cw       Morse code (OOK carrier)
     4  nfm      Narrowband FM voice
-    5  dmr      DMR digital voice (4FSK TDMA)
-    6  p25      P25 digital voice (C4FM)
-    7  dstar    D-STAR digital voice (GMSK)
-    8  lora     LoRa chirp spread spectrum
-    9  pocsag   Pager (2FSK)
-    10 digital  Generic digital (PSK/QAM/OFDM)
-    11 noise    No signal
+    5  lora     LoRa chirp spread spectrum
+    6  pocsag   Pager (2FSK)
+    7  digital  Generic digital (PSK/QAM/OFDM)
+    8  noise    No signal
 """
 
 from __future__ import annotations
@@ -51,21 +41,21 @@ N_IQ = 1024
 SAMPLE_RATE = 1_024_000
 
 OUR_CLASSES = (
-    "fm", "am", "ssb", "cw", "nfm", "dmr", "p25", "dstar",
+    "fm", "am", "ssb", "cw", "nfm",
     "lora", "pocsag", "digital", "noise",
 )
 
 TORCHSIG_CLASSES = {"fm", "am", "ssb", "nfm", "digital"}
-CUSTOM_CLASSES = {"cw", "dmr", "p25", "dstar", "lora", "pocsag", "noise"}
+CUSTOM_CLASSES = {"cw", "lora", "pocsag", "noise"}
 
-# TorchSig class → our class index
+_IDX = {c: i for i, c in enumerate(OUR_CLASSES)}
+
 _TORCHSIG_MAP: dict[str, int] = {
-    "fm": 0,
-    "am-dsb": 1, "am-dsb-sc": 1,
-    "am-lsb": 2, "am-usb": 2,         # SSB
-    # Generic digital modulations → "digital" (index 10)
+    "fm": _IDX["fm"],
+    "am-dsb": _IDX["am"], "am-dsb-sc": _IDX["am"],
+    "am-lsb": _IDX["ssb"], "am-usb": _IDX["ssb"],
 }
-_DIGITAL_TORCHSIG = {
+for cls in (
     "ook", "4ask", "8ask", "16ask", "32ask", "64ask",
     "bpsk", "qpsk", "8psk", "16psk", "32psk", "64psk",
     "16qam", "32qam", "32qam_cross", "64qam", "128qam_cross",
@@ -73,24 +63,13 @@ _DIGITAL_TORCHSIG = {
     "ofdm-64", "ofdm-72", "ofdm-128", "ofdm-180", "ofdm-256",
     "ofdm-300", "ofdm-512", "ofdm-600", "ofdm-900", "ofdm-1024",
     "ofdm-1200", "ofdm-2048",
-}
-for cls in _DIGITAL_TORCHSIG:
-    _TORCHSIG_MAP[cls] = 10
-
-# NFM-like modulations (narrow FSK/MSK) → nfm (index 4)
+):
+    _TORCHSIG_MAP[cls] = _IDX["digital"]
 for cls in ("2fsk", "2gfsk", "2msk", "2gmsk", "4fsk", "4gfsk"):
-    _TORCHSIG_MAP[cls] = 4
+    _TORCHSIG_MAP[cls] = _IDX["nfm"]
 
 
 # --- Pure numpy protocol generators (TorchSig doesn't model these) ---
-
-
-def _bandlimit(signal: np.ndarray, cutoff_hz: float) -> np.ndarray:
-    n = len(signal)
-    freqs = np.fft.fftfreq(n, 1 / SAMPLE_RATE)
-    spectrum = np.fft.fft(signal)
-    spectrum[np.abs(freqs) > cutoff_hz] = 0
-    return np.fft.ifft(spectrum)
 
 
 def _gaussian_filter(n_taps: int, bt: float, sps: int) -> np.ndarray:
@@ -169,27 +148,6 @@ def gen_cw(rng: np.random.Generator) -> np.ndarray:
     return (envelope * np.exp(1j * 2 * np.pi * tone_offset * t)).astype(np.complex64)
 
 
-def gen_dmr(rng: np.random.Generator) -> np.ndarray:
-    sps = int(SAMPLE_RATE / 4800)
-    n_sym = (N_IQ // sps) + 4
-    symbols = rng.choice([-3, -1, 1, 3], size=n_sym).astype(np.float64)
-    return _fsk_modulate(symbols, sps, 648.0, gaussian_bt=0.5)[:N_IQ]
-
-
-def gen_p25(rng: np.random.Generator) -> np.ndarray:
-    sps = int(SAMPLE_RATE / 4800)
-    n_sym = (N_IQ // sps) + 4
-    symbols = rng.choice([-3, -1, 1, 3], size=n_sym).astype(np.float64)
-    return _fsk_modulate(symbols, sps, 600.0, gaussian_bt=0.2)[:N_IQ]
-
-
-def gen_dstar(rng: np.random.Generator) -> np.ndarray:
-    sps = int(SAMPLE_RATE / 4800)
-    n_sym = (N_IQ // sps) + 4
-    symbols = rng.choice([-1, 1], size=n_sym).astype(np.float64)
-    return _fsk_modulate(symbols, sps, 1200.0, gaussian_bt=0.5)[:N_IQ]
-
-
 def gen_lora(rng: np.random.Generator) -> np.ndarray:
     sf = rng.integers(7, 13)
     bw = rng.choice([125e3, 250e3])
@@ -226,9 +184,6 @@ def gen_pocsag(rng: np.random.Generator) -> np.ndarray:
 # Protocol generator dispatch: class_name → (generator_fn, snr_lo, snr_hi)
 _PROTOCOL_GENERATORS: dict[str, tuple] = {
     "cw":     (gen_cw,     -5, 20),
-    "dmr":    (gen_dmr,     0, 30),
-    "p25":    (gen_p25,     0, 30),
-    "dstar":  (gen_dstar,   0, 30),
     "lora":   (gen_lora,  -20, 15),
     "pocsag": (gen_pocsag,  5, 35),
 }
@@ -462,9 +417,8 @@ def generate(
 
     # 3) TorchSig classes
     if requested_torchsig:
-        cls_name_to_idx = {"fm": 0, "am": 1, "ssb": 2, "nfm": 4, "digital": 10}
         torchsig_targets = {
-            cls_name_to_idx[c]: samples_per_class
+            _IDX[c]: samples_per_class
             for c in requested_torchsig
         }
         names = ", ".join(sorted(requested_torchsig))
