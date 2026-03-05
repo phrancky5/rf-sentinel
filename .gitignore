@@ -48,3 +48,9 @@ questions.txt
 bugs.txt
 .claude/settings.local.json
 freq.txt
+core/ml/Sub-GHz IQ dataset
+core/ml/RadioML 201801a/
+core/ml/*.zip
+data/*.npz
+data/cache/
+data/debug/*

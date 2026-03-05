@@ -63,13 +63,21 @@ Adaptive noise floor estimation with threshold-then-segment peak finding:
 
 ### Signal Classification
 
-Rule-based spectral classification with band-aware confidence adjustment:
+Hybrid rule-based + ML classification with band-aware confidence adjustment:
+
+**Rule-based (spectral/temporal features):**
 
 - Spectral features: flatness, occupied bandwidth (99% power), edge steepness
 - Temporal features from waterfall: duty cycle (fraction of time active) and power variance to distinguish bursty voice comms from continuous broadcasts
-- Types: FM broadcast, narrowband FM, AM, digital, carrier/CW, aviation, ham, ISM, GSM, ADS-B
-- Band database (12 entries): FM/AM broadcast, airband, ham bands, PMR446, ISM 433/868, GSM 900, ADS-B
+- Band database: FM/AM broadcast, airband, ham bands, PMR446, ISM 433/868, GSM 900, ADS-B
 - Band prior promotes narrowband detections to band-specific types (e.g. NFM on airband → aviation)
+
+**ML classifier (1D CNN on IQ samples):**
+
+- 12-class modulation recognition: FM, AM, SSB, CW, NFM, DMR, P25, D-STAR, LoRa, POCSAG, digital (PSK/QAM/OFDM), noise
+- 6-channel input features: I, Q, log-magnitude spectrum, instantaneous frequency, amplitude envelope, autocorrelation
+- 5-layer 1D CNN (128 filters, ~238K params) exported to ONNX for fast inference
+- Active in live mode; rule-based path used in scan mode (which has richer temporal features)
 
 ### Frontend
 
@@ -79,6 +87,18 @@ Rule-based spectral classification with band-aware confidence adjustment:
 - Waterfall spectrogram with contrast slider
 - Preset buttons for common bands (FM, airband, ham, ISM)
 - Real-time log console and job history via WebSocket
+
+## Data Sources
+
+This project uses the following datasets for training:
+
+| Dataset                | Description                                                                                                                                   | Source                                                                                                                                                                                             |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **RadioML 2018.01a**   | 2.55M synthetic IQ samples across 24 modulations (PSK, QAM, AM, FM, SSB, OOK, GMSK, OQPSK) at SNR -20 to +30 dB. 1024 IQ samples per example. | T. O'Shea, T. Roy, T. Clancy. "Over-the-Air Deep Learning Based Radio Signal Classification," IEEE JSAC, 2018. Available on [Kaggle](https://www.kaggle.com/datasets/pinxau1000/radioml-2018-01a). |
+| **Sub-GHz IQ Dataset** | Real IQ captures of LoRa (SF7/SF12), IEEE 802.11ah, IEEE 802.15.4g (SUN-OFDM), Sigfox, and noise at 864/867 MHz using USRP B210.              | M. Alhazmi et al., IEEE DataPort. Available on [IEEE DataPort](https://ieee-dataport.org/documents/sub-ghz-iq-dataset).                                                                            |
+| **TorchSig**           | Synthetic RF signal generation library with 57+ modulation types and realistic channel impairments (fading, frequency offset, phase noise).   | TorchDSP. Available on [GitHub](https://github.com/TorchDSP/torchsig).                                                                                                                             |
+
+Custom numpy-based generators are used for protocol-specific signals not covered by the above datasets: CW (Morse OOK), DMR (4GFSK), P25 (C4FM), D-STAR (GMSK), LoRa (CSS chirps), and POCSAG (2FSK).
 
 ## License
 

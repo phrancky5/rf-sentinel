@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
-import { startScan, startLive, retuneLive, stopLive, toggleAudio } from '../api';
+import { startScan, startLive, retuneLive, stopLive, toggleAudio, toggleCapture, getCaptureStatus } from '../api';
 import ModeSelector, { Mode } from './ModeSelector';
 import PresetBar from './PresetBar';
 import ParamSlider from './ParamSlider';
@@ -63,7 +63,20 @@ export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liv
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [inputsOpen, setInputsOpen] = useState(true);
   const [narrowBw, setNarrowBw] = useState<number>(25);
+  const [capturing, setCapturing] = useState(false);
+  const [captureLabel, setCaptureLabel] = useState('live');
   const lastLiveParams = useRef('');
+
+  useEffect(() => {
+    if (!capturing) return;
+    const id = setInterval(async () => {
+      try {
+        const res = await getCaptureStatus();
+        if (!res.capturing) setCapturing(false);
+      } catch { /* ignore */ }
+    }, 2000);
+    return () => clearInterval(id);
+  }, [capturing]);
 
   useEffect(() => {
     if (!liveActive) {
@@ -303,6 +316,33 @@ export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liv
               </select>
             </div>
           )}
+        </div>
+      )}
+
+      {liveActive && (
+        <div className="space-y-2">
+          <span className="text-[10px] text-gray-500 uppercase tracking-wider">ML Debug</span>
+          {!capturing && (
+            <input
+              value={captureLabel}
+              onChange={e => setCaptureLabel(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
+              placeholder="label"
+              className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 focus:border-cyan-500 focus:outline-none"
+            />
+          )}
+          <button
+            onClick={async () => {
+              try {
+                const res = await toggleCapture(!capturing, 3, captureLabel || 'live');
+                setCapturing(res.capturing);
+              } catch (e) {
+                console.error('Capture toggle failed:', e);
+              }
+            }}
+            className={`${recBtn} w-full ${capturing ? recBtnActive : recBtnIdle}`}
+          >
+            {capturing ? '● Capturing...' : 'Capture 3 Snippets'}
+          </button>
         </div>
       )}
     </div>

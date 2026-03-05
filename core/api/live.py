@@ -248,11 +248,13 @@ class LiveSession:
         vfo_iq = None
         if self._vfo_freq_hz is not None and self._config:
             offset_hz = self._vfo_freq_hz - self._config.center_freq
-            if self._demod_state is None:
+            state = self._demod_state
+            if state is None:
                 from core.dsp.demod import DemodState
-                self._demod_state = DemodState()
-            vfo_iq, self._demod_state.vfo_phase = vfo_shift(
-                capture.samples, offset_hz, sample_rate, self._demod_state.vfo_phase,
+                state = DemodState()
+                self._demod_state = state
+            vfo_iq, state.vfo_phase = vfo_shift(
+                capture.samples, offset_hz, sample_rate, state.vfo_phase,
             )
 
         if self._rec_mode == "narrow" and self._rec_file and vfo_iq is not None:
@@ -268,9 +270,10 @@ class LiveSession:
             try:
                 iq = vfo_iq if vfo_iq is not None else capture.samples
                 mode = DemodMode(self._demod_mode)
-                pcm, self._demod_state = demodulate(
+                pcm, new_state = demodulate(
                     iq, sample_rate, mode, self._demod_state,
                 )
+                self._demod_state = new_state
                 self._emit_audio(pcm.tobytes())
             except Exception as e:
                 logger.warning("audio demod error frame %d: %s", frame_count, e)

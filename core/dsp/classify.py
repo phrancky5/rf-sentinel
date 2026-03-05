@@ -10,7 +10,13 @@ FM_BROADCAST = "fm_broadcast"
 NARROWBAND_FM = "narrowband_fm"
 DIGITAL = "digital"
 AM_BROADCAST = "am_broadcast"
+SSB = "ssb"
 CARRIER = "carrier"
+DMR = "dmr"
+P25 = "p25"
+DSTAR = "dstar"
+LORA = "lora"
+POCSAG = "pocsag"
 AVIATION = "aviation"
 HAM = "ham"
 ISM = "ism"
@@ -18,12 +24,20 @@ GSM = "gsm"
 ADSB = "adsb"
 UNKNOWN = "unknown"
 
+ML_CONFIDENCE_THRESHOLD = 0.5
+
 SHORT_LABELS = {
     FM_BROADCAST: "FM",
     NARROWBAND_FM: "NFM",
     DIGITAL: "DIG",
     AM_BROADCAST: "AM",
+    SSB: "SSB",
     CARRIER: "CW",
+    DMR: "DMR",
+    P25: "P25",
+    DSTAR: "DST",
+    LORA: "LoRa",
+    POCSAG: "PGR",
     AVIATION: "AIR",
     HAM: "HAM",
     ISM: "ISM",
@@ -153,12 +167,19 @@ def _apply_temporal(
     return signal_type, confidence
 
 
-_NFM_COMPATIBLE = {AVIATION, HAM, ISM, NARROWBAND_FM}
+_NFM_COMPATIBLE = {AVIATION, HAM, ISM, NARROWBAND_FM, DMR, P25, DSTAR}
 
 _ML_CLASS_MAP = {
     "fm": FM_BROADCAST,
     "am": AM_BROADCAST,
+    "ssb": SSB,
+    "cw": CARRIER,
     "nfm": NARROWBAND_FM,
+    "dmr": DMR,
+    "p25": P25,
+    "dstar": DSTAR,
+    "lora": LORA,
+    "pocsag": POCSAG,
     "digital": DIGITAL,
     "noise": None,
 }
@@ -250,8 +271,11 @@ def _classify_one(
     if ml_result is not None:
         ml_class, ml_conf = ml_result
         mapped = _ML_CLASS_MAP.get(ml_class)
-        if mapped is not None:
+        if mapped is not None and ml_conf >= ML_CONFIDENCE_THRESHOLD:
             signal_type = mapped
+            confidence = ml_conf
+        elif mapped is not None:
+            signal_type = UNKNOWN
             confidence = ml_conf
         else:
             confidence = max(0.2, confidence - 0.2)
@@ -304,7 +328,12 @@ def classify_peaks(
         from core.ml.inference import get_classifier
         classifier = get_classifier()
         peak_freqs_hz = [getattr(pk, "freq_mhz", 0.0) * 1e6 for pk in peaks]
-        ml_results = classifier.classify(iq_samples, sample_rate, center_freq_hz, peak_freqs_hz)
+        peak_bws_hz = [getattr(pk, "bandwidth_khz", 200.0) * 1e3 for pk in peaks]
+        peak_powers_db = [getattr(pk, "power_db", 0.0) for pk in peaks]
+        ml_results = classifier.classify(
+            iq_samples, sample_rate, center_freq_hz, peak_freqs_hz, peak_bws_hz,
+            peak_powers_db=peak_powers_db,
+        )
 
     return [
         _classify_one(freqs_mhz, power_db, pk, waterfall_db,

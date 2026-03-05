@@ -65,6 +65,16 @@ export async function setVfo(freq_mhz: number): Promise<{ vfo_freq_mhz: number }
   return (await post('/api/live/vfo', { freq_mhz })).json();
 }
 
+export async function toggleCapture(enabled: boolean, count = 20, label = 'live'): Promise<{ capturing: boolean }> {
+  return (await post('/api/live/capture', { enabled, count, label })).json();
+}
+
+export async function getCaptureStatus(): Promise<{ capturing: boolean }> {
+  const res = await fetch(`${API}/api/live/capture`);
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
 // ── Scan history ──────────────────────────────────────
 
 export interface ScanSummary {
