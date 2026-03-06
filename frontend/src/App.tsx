@@ -1,7 +1,7 @@
-import { useState, useCallback, useRef, useMemo } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useWebSocket, LogEntry } from './hooks/useWebSocket';
 import { useAudioPlayer } from './hooks/useAudioPlayer';
-import { JobInfo, setVfo, toggleAudio, getScan, cancelJob, deleteScan, startRecording, stopRecording } from './api';
+import { JobInfo, setVfo, toggleAudio, getScan, cancelJob, deleteScan, startRecording, stopRecording, listBookmarks, type Bookmark } from './api';
 import ControlPanel, { ControlPanelHandle } from './components/ControlPanel';
 import LogConsole from './components/LogConsole';
 import JobList from './components/JobList';
@@ -154,7 +154,7 @@ function Header({ liveActive, audioEnabled, recording, serverOnline }: {
   );
 }
 
-function Sidebar({ controlPanelRef, liveActive, audioEnabled, onLiveToggle, onAudioToggle, onVolumeChange, vfoFreq, onVfoChange, jobs, selectedJob, onSelectJob, onCancelJob, onDeleteScan, recording, onRecord }: {
+function Sidebar({ controlPanelRef, liveActive, audioEnabled, onLiveToggle, onAudioToggle, onVolumeChange, vfoFreq, onVfoChange, jobs, selectedJob, onSelectJob, onCancelJob, onDeleteScan, recording, onRecord, bookmarks, setBookmarks }: {
   controlPanelRef: React.Ref<ControlPanelHandle>;
   liveActive: boolean;
   audioEnabled: boolean;
@@ -170,6 +170,8 @@ function Sidebar({ controlPanelRef, liveActive, audioEnabled, onLiveToggle, onAu
   onDeleteScan: (scanId: string) => void;
   recording: string | null;
   onRecord: (mode: 'wide' | 'narrow', bandwidthKhz?: number) => void;
+  bookmarks: Bookmark[];
+  setBookmarks: React.Dispatch<React.SetStateAction<Bookmark[]>>;
 }) {
   return (
     <aside className="w-72 border-r border-gray-800 flex flex-col">
@@ -185,6 +187,8 @@ function Sidebar({ controlPanelRef, liveActive, audioEnabled, onLiveToggle, onAu
           onVfoChange={onVfoChange}
           recording={recording}
           onRecord={onRecord}
+          bookmarks={bookmarks}
+          setBookmarks={setBookmarks}
         />
       </div>
       <div className="flex-1 overflow-y-auto p-3">
@@ -222,7 +226,7 @@ function SignalPanel({ peaks, vfoFreq, onPeakClick, showSteady, showTransient, o
   );
 }
 
-function MainContent({ liveActive, liveFrame, selectedJob, logs, connected, onClear, vfoFreq, onFreqClick, onScanFreqClick, peakFilter }: {
+function MainContent({ liveActive, liveFrame, selectedJob, logs, connected, onClear, vfoFreq, onFreqClick, onScanFreqClick, peakFilter, bookmarks }: {
   liveActive: boolean;
   liveFrame: SpectrumFrame | null;
   selectedJob: JobInfo | null;
@@ -233,6 +237,7 @@ function MainContent({ liveActive, liveFrame, selectedJob, logs, connected, onCl
   onFreqClick: (freq_mhz: number) => void;
   onScanFreqClick: (freq_mhz: number) => void;
   peakFilter: (pk: { transient?: boolean }) => boolean;
+  bookmarks: Bookmark[];
 }) {
   const [chartView, setChartView] = useState<ChartView | null>(null);
 
@@ -242,14 +247,14 @@ function MainContent({ liveActive, liveFrame, selectedJob, logs, connected, onCl
         {liveActive || liveFrame ? (
           <>
             <div className="flex-[2] min-h-0">
-              <SpectrumChart frame={liveFrame} mode="live" vfoFreq={vfoFreq} onFreqClick={onFreqClick} onViewChange={setChartView} />
+              <SpectrumChart frame={liveFrame} mode="live" vfoFreq={vfoFreq} onFreqClick={onFreqClick} onViewChange={setChartView} bookmarks={bookmarks} />
             </div>
             <div className="flex-1 min-h-0 border-t border-gray-800/50">
-              <WaterfallCanvas frame={liveFrame} view={chartView} />
+              <WaterfallCanvas frame={liveFrame} view={chartView} bookmarks={bookmarks} />
             </div>
           </>
         ) : (
-          <ResultView job={selectedJob} onFreqClick={onScanFreqClick} peakFilter={peakFilter} />
+          <ResultView job={selectedJob} onFreqClick={onScanFreqClick} peakFilter={peakFilter} bookmarks={bookmarks} />
         )}
       </div>
       <LogConsole logs={logs} connected={connected} onClear={onClear} />
@@ -270,8 +275,13 @@ export default function App() {
   const [showTransient, setShowTransient] = useState(true);
   const [vfoFreq, setVfoFreq] = useState<number | null>(null);
   const [recording, setRecording] = useState<string | null>(null);
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const audioRef = useRef(audio);
   audioRef.current = audio;
+
+  useEffect(() => {
+    listBookmarks().then(setBookmarks).catch(() => {});
+  }, []);
 
   const handleSpectrum = useCallback((data: any) => {
     const freqs: number[] = data.freqs_mhz;
@@ -287,12 +297,12 @@ export default function App() {
         if (prev < freqs[0] || prev > freqs[freqs.length - 1]) {
           setAudioEnabled(false);
           audioRef.current.stop();
-          setVfo(center).catch(() => {});
+          setVfo(center).catch(() => setVfoFreq(null));
           return center;
         }
         return prev;
       }
-      setVfo(center).catch(() => {});
+      setVfo(center).catch(() => setVfoFreq(null));
       return center;
     });
   }, []);
@@ -323,7 +333,7 @@ export default function App() {
   const handleFreqClick = useCallback((freq_mhz: number) => {
     if (!liveActive) return;
     setVfoFreq(freq_mhz);
-    setVfo(freq_mhz).catch(() => {});
+    setVfo(freq_mhz).catch(() => setVfoFreq(null));
     if (!audioEnabled) {
       toggleAudio({ enabled: true, demod_mode: 'fm' }).catch(() => {});
       setAudioEnabled(true);
@@ -394,6 +404,8 @@ export default function App() {
           onDeleteScan={handleDeleteScan}
           recording={recording}
           onRecord={handleRecord}
+          bookmarks={bookmarks}
+          setBookmarks={setBookmarks}
         />
         <MainContent
           liveActive={liveActive}
@@ -406,6 +418,7 @@ export default function App() {
           onFreqClick={handleFreqClick}
           onScanFreqClick={handleScanPeakClick}
           peakFilter={peakFilter}
+          bookmarks={bookmarks}
         />
         <SignalPanel
           peaks={liveActive ? (liveFrame?.peaks || []) : (selectedJob?.status === 'complete' ? selectedJob.params.peaks ?? [] : [])}

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from core.api.models import ScanRequest, LiveRequest, RetuneRequest, AudioToggleRequest, VfoRequest, RecordStartRequest, CaptureRequest
+from core.api.models import ScanRequest, LiveRequest, RetuneRequest, AudioToggleRequest, VfoRequest, RecordStartRequest, CaptureRequest, BookmarkRequest
 from core.api.runner import JobRunner
+
+logger = logging.getLogger("rfsentinel.routes")
 
 
 def create_routes(runner: JobRunner) -> APIRouter:
@@ -23,6 +27,8 @@ def create_routes(runner: JobRunner) -> APIRouter:
 
     @router.post("/api/live/start")
     async def start_live(req: LiveRequest):
+        logger.debug("→ live/start %.3f–%.3f MHz gain=%.0f",
+                     req.start_mhz, req.stop_mhz, req.gain)
         runner.live.start(req.start_mhz, req.stop_mhz, req.gain,
                           req.audio_enabled, req.demod_mode)
         return {"status": "started", "start_mhz": req.start_mhz, "stop_mhz": req.stop_mhz,
@@ -37,7 +43,11 @@ def create_routes(runner: JobRunner) -> APIRouter:
     async def retune_live(req: RetuneRequest):
         if not runner.live.active:
             return JSONResponse({"error": "Live mode is not active"}, status_code=400)
-        runner.live.retune(req.start_mhz, req.stop_mhz, req.gain)
+        logger.debug("→ retune start=%.3f stop=%.3f gain=%.0f",
+                     req.start_mhz, req.stop_mhz, req.gain)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, runner.live.retune, req.start_mhz, req.stop_mhz, req.gain)
         return {"status": "retuned", "start_mhz": req.start_mhz, "stop_mhz": req.stop_mhz}
 
     @router.post("/api/live/audio")
@@ -51,6 +61,7 @@ def create_routes(runner: JobRunner) -> APIRouter:
     async def set_vfo(req: VfoRequest):
         if not runner.live.active:
             return JSONResponse({"error": "Live mode is not active"}, status_code=400)
+        logger.debug("→ vfo %.3f MHz", req.freq_mhz)
         runner.live.set_vfo(req.freq_mhz)
         return {"vfo_freq_mhz": req.freq_mhz}
 
@@ -125,5 +136,34 @@ def create_routes(runner: JobRunner) -> APIRouter:
         if db_delete(scan_id):
             return {"status": "deleted"}
         return JSONResponse({"error": "Scan not found"}, status_code=404)
+
+    # ── Bookmarks ──────────────────────────────────────────
+
+    @router.get("/api/bookmarks")
+    async def get_bookmarks():
+        from core.api.db import list_bookmarks
+        return list_bookmarks()
+
+    @router.post("/api/bookmarks")
+    async def create_bookmark(req: BookmarkRequest):
+        import uuid
+        from core.api.db import save_bookmark
+        bk_id = str(uuid.uuid4())
+        save_bookmark(bk_id, req.label, req.freq_mhz, req.notes)
+        return {"id": bk_id, "status": "saved"}
+
+    @router.put("/api/bookmarks/{bk_id}")
+    async def update_bookmark(bk_id: str, req: BookmarkRequest):
+        from core.api.db import update_bookmark as db_update_bk
+        if db_update_bk(bk_id, req.label, req.freq_mhz, req.notes):
+            return {"status": "updated"}
+        return JSONResponse({"error": "Bookmark not found"}, status_code=404)
+
+    @router.delete("/api/bookmarks/{bk_id}")
+    async def remove_bookmark(bk_id: str):
+        from core.api.db import delete_bookmark
+        if delete_bookmark(bk_id):
+            return {"status": "deleted"}
+        return JSONResponse({"error": "Bookmark not found"}, status_code=404)
 
     return router

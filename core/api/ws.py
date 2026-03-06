@@ -78,7 +78,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         from core.api.db import list_scans
         history = list_scans(limit=20)["scans"]
         logger.info(f"Sending {len(history)} historical scans to client")
-        for scan in history:
+        for scan in reversed(history):
             await ws.send_text(json.dumps({"type": "job_update", "job": {
                 "id": scan["id"], "type": "scan", "status": "complete",
                 "params": {k: scan[k] for k in ("start_mhz", "stop_mhz", "duration", "gain")},

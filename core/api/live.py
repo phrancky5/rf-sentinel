@@ -79,6 +79,8 @@ class LiveSession:
         if self._active:
             self.stop()
         center_hz, sample_rate, start_mhz, stop_mhz = self._compute_params(start_mhz, stop_mhz)
+        logger.debug("start: %.1f–%.1f MHz center=%.3f MHz sr=%.0f gain=%.0f",
+                     start_mhz, stop_mhz, center_hz / 1e6, sample_rate, gain)
         self._audio_enabled = audio_enabled
         self._demod_mode = demod_mode
         self._vfo_freq_hz = None
@@ -109,21 +111,29 @@ class LiveSession:
 
     def retune(self, start_mhz: float, stop_mhz: float, gain: float) -> None:
         if not self._active or not self._sdr:
+            logger.debug("retune: skipped (active=%s sdr=%s)", self._active, self._sdr is not None)
             return
         from core.sdr import CaptureConfig
         center_hz, sample_rate, start_mhz, stop_mhz = self._compute_params(start_mhz, stop_mhz)
         if self._config and sample_rate != self._config.sample_rate:
-            self._emit("live", "Sample rate changed — restarting stream")
+            logger.debug("retune: sample rate changed %.0f→%.0f, restarting",
+                         self._config.sample_rate, sample_rate)
+            audio = self._audio_enabled
+            demod = self._demod_mode
             self.stop()
-            self.start(start_mhz, stop_mhz, gain, self._audio_enabled, self._demod_mode)
+            self.start(start_mhz, stop_mhz, gain, audio, demod)
             return
+        old_fc = self._config.center_freq / 1e6 if self._config else 0
+        old_gain = self._config.gain if self._config else 0
+        logger.debug("retune: fc=%.3f→%.3f MHz gain=%.0f→%.0f dB",
+                     old_fc, center_hz / 1e6, old_gain, gain)
         self._sdr.retune(center_hz, gain)
         self._config = CaptureConfig(
             center_freq=center_hz, sample_rate=sample_rate,
             gain=gain, duration=0,
         )
         self._reset_dsp_state()
-        logger.debug("retune: fc=%.3f MHz gain=%.0f dB", center_hz / 1e6, gain)
+        logger.debug("retune: OK")
 
     def toggle_audio(self, enabled: bool, demod_mode: DemodMode = DemodMode.FM) -> None:
         self._audio_enabled = enabled
@@ -135,8 +145,14 @@ class LiveSession:
     def set_vfo(self, freq_mhz: float) -> None:
         if self._rec_mode == "narrow":
             self.stop_recording()
+        old_vfo = self._vfo_freq_hz
         self._vfo_freq_hz = freq_mhz * 1e6
         self._reset_dsp_state()
+        offset_khz = 0.0
+        if self._config:
+            offset_khz = (self._vfo_freq_hz - self._config.center_freq) / 1e3
+        logger.debug("VFO: %s → %.3f MHz (offset %.1f kHz from center)",
+                     f"{old_vfo/1e6:.3f}" if old_vfo else "none", freq_mhz, offset_khz)
         self._emit("live", f"VFO → {freq_mhz:.3f} MHz")
 
     @property
@@ -331,6 +347,8 @@ class LiveSession:
                 )
                 sdr.configure(self._config)
                 chunk_samples = int(sample_rate * LIVE_FRAME_DURATION_S)
+                logger.debug("stream start: fc=%.3f MHz sr=%.0f chunk=%d",
+                             center_hz / 1e6, sample_rate, chunk_samples)
 
                 def on_chunk(iq):
                     nonlocal frame_count

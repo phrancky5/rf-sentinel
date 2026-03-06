@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
-import { startScan, startLive, retuneLive, stopLive, toggleAudio, toggleCapture, getCaptureStatus } from '../api';
+import { useState, useCallback, useEffect, useRef, forwardRef, useImperativeHandle, type Dispatch, type SetStateAction } from 'react';
+import { startScan, startLive, retuneLive, stopLive, toggleAudio, toggleCapture, getCaptureStatus, saveBookmark, updateBookmark, deleteBookmark, type Bookmark } from '../api';
 import ModeSelector, { Mode } from './ModeSelector';
 import PresetBar from './PresetBar';
 import ParamSlider from './ParamSlider';
@@ -20,6 +20,8 @@ interface Props {
   onVfoChange: (freq_mhz: number) => void;
   recording: string | null;
   onRecord: (mode: 'wide' | 'narrow', bandwidthKhz?: number) => void;
+  bookmarks: Bookmark[];
+  setBookmarks: Dispatch<SetStateAction<Bookmark[]>>;
 }
 
 const submitBtn = 'w-full py-2.5 rounded-lg font-medium text-sm transition-all';
@@ -50,7 +52,7 @@ function ScanInfo({ bandwidth, numChunks, duration }: { bandwidth: number; numCh
   );
 }
 
-export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liveActive, onLiveToggle, audioEnabled, onAudioToggle, onVolumeChange, vfoFreq, onVfoChange, recording, onRecord }, ref) {
+export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liveActive, onLiveToggle, audioEnabled, onAudioToggle, onVolumeChange, vfoFreq, onVfoChange, recording, onRecord, bookmarks, setBookmarks }, ref) {
   const [mode, setMode] = useState<Mode>('live');
   const [startMhz, setStartMhz] = useState(85.0);
   const [stopMhz, setStopMhz] = useState(140.0);
@@ -61,11 +63,16 @@ export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liv
   const [volume, setVolume] = useState(50);
   const [demodMode, setDemodMode] = useState<DemodMode>('fm');
   const [presetsOpen, setPresetsOpen] = useState(false);
+  const [bookmarksOpen, setBookmarksOpen] = useState(true);
+  const [bkFreq, setBkFreq] = useState('');
+  const [bkLabel, setBkLabel] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [inputsOpen, setInputsOpen] = useState(true);
   const [narrowBw, setNarrowBw] = useState<number>(25);
   const [capturing, setCapturing] = useState(false);
   const [captureLabel, setCaptureLabel] = useState('live');
   const lastLiveParams = useRef('');
+  const retuning = useRef(false);
 
   useEffect(() => {
     if (!capturing) return;
@@ -92,6 +99,8 @@ export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liv
     lastLiveParams.current = key;
 
     const timer = setTimeout(async () => {
+      if (retuning.current) return;
+      retuning.current = true;
       try {
         await retuneLive({
           start_mhz: +(centerMhz - 1.0).toFixed(1),
@@ -100,6 +109,8 @@ export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liv
         });
       } catch (e) {
         console.error('Failed to retune:', e);
+      } finally {
+        retuning.current = false;
       }
     }, 300);
     return () => clearTimeout(timer);
@@ -210,6 +221,95 @@ export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liv
               activeStop={isLive ? centerMhz + 1 : stopMhz}
               onSelect={handlePreset}
             />
+          </div>
+        )}
+      </div>
+
+      <div>
+        <button onClick={() => setBookmarksOpen(o => !o)} className={sectionToggle}>
+          <span className="uppercase tracking-wider">Bookmarks</span>
+          <span className="text-sm text-cyan-400">{bookmarksOpen ? '▲' : '▼'}</span>
+        </button>
+        {bookmarksOpen && (
+          <div className="mt-2 space-y-2">
+            {bookmarks.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {bookmarks.map(bk => (
+                  <span key={bk.id} className="group flex items-center gap-0.5">
+                    <button
+                      onClick={() => {
+                        setEditingId(bk.id);
+                        setBkFreq(String(bk.freq_mhz));
+                        setBkLabel(bk.label);
+                      }}
+                      title={`${bk.freq_mhz} MHz — click to edit`}
+                      className={`px-2 py-1 text-xs rounded-l border transition-all ${editingId === bk.id ? 'border-cyan-500 text-cyan-300 bg-cyan-500/10' : 'border-gray-700 text-gray-400 hover:border-cyan-500/50 hover:text-cyan-300'}`}
+                    >
+                      {bk.label}
+                      <span className="ml-1 text-gray-600">{bk.freq_mhz}</span>
+                    </button>
+                    <button
+                      onClick={async () => {
+                        await deleteBookmark(bk.id);
+                        setBookmarks(prev => prev.filter(b => b.id !== bk.id));
+                        if (editingId === bk.id) { setEditingId(null); setBkFreq(''); setBkLabel(''); }
+                      }}
+                      className="px-1 py-1 text-xs rounded-r border border-l-0 border-gray-700 text-gray-600 hover:text-red-400 hover:border-red-500/50 transition-all"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <input
+                value={bkFreq}
+                onChange={e => setBkFreq(e.target.value)}
+                placeholder="Frequency (MHz)"
+                className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 focus:border-cyan-500 focus:outline-none"
+              />
+              <input
+                value={bkLabel}
+                onChange={e => setBkLabel(e.target.value)}
+                placeholder="Label"
+                className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 focus:border-cyan-500 focus:outline-none"
+              />
+              <div className="flex gap-1.5">
+                <button
+                  onClick={async () => {
+                    const freq = parseFloat(bkFreq);
+                    if (!bkLabel.trim() || isNaN(freq)) return;
+                    try {
+                      if (editingId) {
+                        await updateBookmark(editingId, bkLabel.trim(), freq);
+                        setBookmarks(prev => prev.map(b => b.id === editingId ? { ...b, label: bkLabel.trim(), freq_mhz: freq } : b).sort((a, b) => a.freq_mhz - b.freq_mhz));
+                        setEditingId(null);
+                      } else {
+                        const { id } = await saveBookmark(bkLabel.trim(), freq);
+                        setBookmarks(prev => [...prev, { id, label: bkLabel.trim(), freq_mhz: freq, notes: '', created_at: new Date().toISOString() }].sort((a, b) => a.freq_mhz - b.freq_mhz));
+                      }
+                      setBkFreq('');
+                      setBkLabel('');
+                    } catch (e) {
+                      console.error('Failed to save bookmark:', e);
+                    }
+                  }}
+                  disabled={!bkLabel.trim() || isNaN(parseFloat(bkFreq))}
+                  className="flex-1 py-1.5 text-xs rounded border border-gray-700 text-gray-400 hover:border-cyan-500/50 hover:text-cyan-300 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  {editingId ? 'Update' : 'Save'}
+                </button>
+                {editingId && (
+                  <button
+                    onClick={() => { setEditingId(null); setBkFreq(''); setBkLabel(''); }}
+                    className="px-3 py-1.5 text-xs rounded border border-gray-700 text-gray-400 hover:border-gray-500 hover:text-gray-200 transition-all"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>

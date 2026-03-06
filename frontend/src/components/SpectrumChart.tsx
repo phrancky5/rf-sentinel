@@ -22,6 +22,7 @@ interface Props {
   vfoFreq?: number | null;
   onFreqClick?: (freq_mhz: number) => void;
   onViewChange?: (view: ChartView) => void;
+  bookmarks?: {label: string; freq_mhz: number}[];
 }
 
 function useStateRef<T>(init: T): [T, (v: T) => void, React.MutableRefObject<T>] {
@@ -322,6 +323,44 @@ function vfoPlugin(
   };
 }
 
+const BOOKMARK_COLOR = 'rgba(255,200,50,0.4)';
+const BOOKMARK_LABEL = 'rgba(255,200,50,0.8)';
+
+function bookmarkPlugin(
+  bookmarksRef: React.MutableRefObject<{label: string; freq_mhz: number}[]>,
+): uPlot.Plugin {
+  return {
+    hooks: {
+      draw: (u: uPlot) => {
+        const bks = bookmarksRef.current;
+        if (!bks.length) return;
+        const { ctx, bbox } = u;
+        const dpr = uPlot.pxRatio;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bbox.left, bbox.top, bbox.width, bbox.height);
+        ctx.clip();
+        ctx.strokeStyle = BOOKMARK_COLOR;
+        ctx.lineWidth = 1 * dpr;
+        ctx.setLineDash([3 * dpr, 3 * dpr]);
+        ctx.font = `${Math.round(8 * dpr)}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.fillStyle = BOOKMARK_LABEL;
+        for (const bk of bks) {
+          const x = u.valToPos(bk.freq_mhz, 'x', true);
+          if (x < bbox.left || x > bbox.left + bbox.width) continue;
+          ctx.beginPath();
+          ctx.moveTo(x, bbox.top);
+          ctx.lineTo(x, bbox.top + bbox.height);
+          ctx.stroke();
+          ctx.fillText(bk.label, x, bbox.top + bbox.height - 4 * dpr);
+        }
+        ctx.restore();
+      },
+    },
+  };
+}
+
 function wheelZoomPlugin(
   xStartRef: React.MutableRefObject<number>,
   xEndRef: React.MutableRefObject<number>,
@@ -372,7 +411,7 @@ const XZOOM_H = 24;
 const YZOOM_W = 24;
 
 export default function SpectrumChart({
-  frame, mode, vfoFreq, onFreqClick, onViewChange,
+  frame, mode, vfoFreq, onFreqClick, onViewChange, bookmarks,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -387,6 +426,8 @@ export default function SpectrumChart({
   vfoRef.current = vfoFreq ?? null;
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  const bookmarksRef = useRef<{label: string; freq_mhz: number}[]>([]);
+  bookmarksRef.current = bookmarks || [];
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 400, h: 300 });
   const [yLo, setYLo, yLoRef] = useStateRef(-150);
   const [yHi, setYHi, yHiRef] = useStateRef(0);
@@ -496,6 +537,7 @@ export default function SpectrumChart({
       legend: { show: false },
       plugins: [
         bgPlugin(),
+        bookmarkPlugin(bookmarksRef),
         peakMarkersPlugin(peaksRef),
         vfoPlugin(vfoRef, onFreqClickRef, xStartRef, xEndRef, dataXMinRef, dataXMaxRef, setXStart, setXEnd, peaksRef, modeRef),
         wheelZoomPlugin(xStartRef, xEndRef, dataXMinRef, dataXMaxRef, setXStart, setXEnd),
@@ -597,6 +639,10 @@ export default function SpectrumChart({
   useEffect(() => {
     chartRef.current?.redraw(false);
   }, [vfoFreq]);
+
+  useEffect(() => {
+    chartRef.current?.redraw(false);
+  }, [bookmarks]);
 
   const fMin = frame?.freqs_mhz?.[0];
   const fMax = frame?.freqs_mhz?.[frame?.freqs_mhz?.length - 1];

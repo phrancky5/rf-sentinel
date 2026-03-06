@@ -73,9 +73,16 @@ class SDRDevice:
 
         log.debug("SDR reconfig: sr=%.0f fc=%.0f gain=%.0f",
                   config.sample_rate, config.center_freq, config.gain)
-        self._sdr.sample_rate = config.sample_rate
-        self._sdr.center_freq = config.center_freq
-        self._sdr.gain = config.gain
+        try:
+            self._sdr.sample_rate = config.sample_rate
+            self._sdr.center_freq = config.center_freq
+            self._sdr.gain = config.gain
+        except Exception as exc:
+            self._last_config_key = None
+            raise RuntimeError(
+                f"I2C write failed during config (freq={config.center_freq/1e6:.1f} MHz, "
+                f"gain={config.gain:.0f} dB). Device may need a replug."
+            ) from exc
 
         try:
             self._sdr.read_samples(256 * 1024)
@@ -164,11 +171,19 @@ class SDRDevice:
 
         Uses USB control transfers (I2C) which don't conflict with the
         bulk sample transfers running in read_samples_async.
+        Raises RuntimeError on I2C failure (device may need replug).
         """
         if self._sdr is None:
             raise RuntimeError("Device not open")
-        self._sdr.center_freq = center_freq
-        self._sdr.gain = gain
+        try:
+            self._sdr.center_freq = center_freq
+            self._sdr.gain = gain
+        except Exception as exc:
+            self._last_config_key = None
+            raise RuntimeError(
+                f"I2C write failed during retune (freq={center_freq/1e6:.1f} MHz, "
+                f"gain={gain:.0f} dB). Device may need a replug."
+            ) from exc
         if self._last_config_key:
             self._last_config_key = (self._last_config_key[0], center_freq, gain)
 
