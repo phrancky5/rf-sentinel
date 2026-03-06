@@ -42,8 +42,8 @@ OUR_CLASSES = (
     "lora", "adsb", "noise",
 )
 
-TORCHSIG_CLASSES = {"fm", "am", "nfm", "ofdm", "tdma", "lora"}
-CUSTOM_CLASSES = {"adsb", "noise"}
+TORCHSIG_CLASSES = {"fm", "am", "ofdm", "tdma", "lora"}
+CUSTOM_CLASSES = {"nfm", "adsb", "noise"}
 
 _IDX = {c: i for i, c in enumerate(OUR_CLASSES)}
 
@@ -57,11 +57,6 @@ _TORCHSIG_CONFIG: dict[str, dict] = {
     "am": {
         "generators": ["am-dsb", "am-dsb-sc"],
         "bw_min": 6_000, "bw_max": 10_000,
-        "center_jitter": 0.10,
-    },
-    "nfm": {
-        "generators": ["2fsk", "2gfsk", "2msk", "2gmsk", "4fsk", "4gfsk"],
-        "bw_min": 8_000, "bw_max": 25_000,
         "center_jitter": 0.10,
     },
     "ofdm": {
@@ -82,6 +77,7 @@ _TORCHSIG_CONFIG: dict[str, dict] = {
         ],
         "bw_min": 10_000, "bw_max": 100_000,
         "center_jitter": 0.10,
+        "post_process": "burst",
     },
     "lora": {
         "generators": ["chirpss"],
@@ -125,6 +121,53 @@ def _augment(iq: np.ndarray, rng: np.random.Generator,
     iq = iq * np.exp(1j * rng.uniform(0, 2 * np.pi))
     return _unit_power(iq)
 
+
+
+def _apply_burst_envelope(iq: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Apply TDMA-style burst windowing: 1–3 active bursts with idle gaps."""
+    n = len(iq)
+    envelope = np.zeros(n, dtype=np.float64)
+    ramp = 4  # raised-cosine transition samples
+
+    n_bursts = rng.integers(1, 4)
+    duty = rng.uniform(0.15, 0.50)  # per-burst duty cycle
+    burst_len = max(ramp * 4, int(n * duty / n_bursts))
+
+    for _ in range(n_bursts):
+        start = rng.integers(0, max(1, n - burst_len))
+        end = min(start + burst_len, n)
+        envelope[start:end] = 1.0
+        # Raised-cosine edges
+        r = min(ramp, (end - start) // 2)
+        if r > 0:
+            window = 0.5 * (1 - np.cos(np.pi * np.arange(r) / r))
+            envelope[start:start + r] = window
+            envelope[end - r:end] = window[::-1]
+
+    # Idle portions get low-level noise
+    idle_level = rng.uniform(0.01, 0.05)
+    envelope = np.maximum(envelope, idle_level)
+    return (iq * envelope).astype(np.complex64)
+
+
+def gen_nfm(rng: np.random.Generator) -> np.ndarray:
+    """Generate narrowband FM voice signal (analog FM, ±1–5 kHz deviation)."""
+    deviation = rng.uniform(1e3, 5e3)
+    t = np.arange(N_IQ) / SAMPLE_RATE
+
+    # Audio: sum of 3–8 random sinusoids in voice band (300–3000 Hz)
+    n_tones = rng.integers(3, 9)
+    audio = np.zeros(N_IQ, dtype=np.float64)
+    for _ in range(n_tones):
+        freq = rng.uniform(300, 3000)
+        phase = rng.uniform(0, 2 * np.pi)
+        audio += rng.uniform(0.3, 1.0) * np.sin(2 * np.pi * freq * t + phase)
+    audio = audio / (np.max(np.abs(audio)) + 1e-12)
+
+    # FM modulate: constant envelope, phase = 2π * deviation * integral(audio)
+    phase = 2 * np.pi * deviation * np.cumsum(audio) / SAMPLE_RATE
+    iq = np.exp(1j * phase).astype(np.complex64)
+    return iq
 
 
 def gen_adsb(rng: np.random.Generator) -> np.ndarray:
@@ -184,6 +227,7 @@ def gen_adsb(rng: np.random.Generator) -> np.ndarray:
 
 # Protocol generator dispatch: class_name → (generator_fn, snr_lo, snr_hi)
 _PROTOCOL_GENERATORS: dict[str, tuple] = {
+    "nfm":    (gen_nfm,    -5, 30),
     "adsb":   (gen_adsb,    5, 30),
 }
 
@@ -234,6 +278,10 @@ def _torchsig_worker(
         frequency_max=int(SAMPLE_RATE * 0.5),
     )
 
+    _POST_PROCESSORS = {"burst": _apply_burst_envelope}
+    post_process = _POST_PROCESSORS.get(cfg.get("post_process", ""), None)
+    rng = np.random.default_rng(seed + 9999)
+
     samples: list[np.ndarray] = []
     it = iter(dataset)
     skipped = 0
@@ -259,6 +307,8 @@ def _torchsig_worker(
             skipped += 1
             continue
 
+        if post_process:
+            iq = post_process(iq, rng)
         samples.append(_unit_power(iq))
 
         if len(samples) - last_log >= 500:

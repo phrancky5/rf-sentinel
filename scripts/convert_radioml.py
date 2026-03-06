@@ -4,7 +4,7 @@ Maps 24 RadioML classes to our 8-class scheme and filters to useful SNR range.
 
 Usage:
     python scripts/convert_radioml.py \
-        --input "core/ml/archive/GOLD_XYZ_OSC.0001_1024.hdf5" \
+        --input "core/ml/RadioML 201801a/GOLD_XYZ_OSC.0001_1024.hdf5" \
         --output data/radioml.npz \
         --samples-per-class 5000 \
         --min-snr -6
@@ -31,29 +31,11 @@ RADIOML_CLASSES = [
 
 RADIOML_TO_OURS = {
     "FM": "fm",
-    # AM-DSB dropped — RadioML AM has broken IQ balance (14:1 vs real 1:1)
-    "GMSK": "nfm",
-    "OOK": "tdma",
-    "OQPSK": "tdma",
-    "BPSK": "tdma",
-    "QPSK": "tdma",
-    "8PSK": "tdma",
-    "16PSK": "tdma",
-    "32PSK": "tdma",
-    "4ASK": "tdma",
-    "8ASK": "tdma",
-    "16APSK": "tdma",
-    "32APSK": "tdma",
-    "64APSK": "tdma",
-    "128APSK": "tdma",
-    "16QAM": "tdma",
-    "32QAM": "tdma",
-    "64QAM": "tdma",
-    "128QAM": "tdma",
-    "256QAM": "tdma",
-    # SSB dropped — no HF reception with RTL-SDR
-    # "AM-SSB-WC": ...,
-    # "AM-SSB-SC": ...,
+    # Everything else dropped:
+    # - AM-DSB: broken IQ balance (14:1 vs real 1:1)
+    # - GMSK: digital modulation, not analog NFM
+    # - PSK/QAM/ASK/OOK: continuous single-carrier, no TDMA burst structure
+    # - SSB: no HF reception with RTL-SDR
 }
 
 

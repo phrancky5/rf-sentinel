@@ -222,7 +222,7 @@ def _compute_class_means(
             samples = [samples[i] for i in idx]
         feats = np.stack([iq_to_channels(s) for s in samples])
         means[cls] = feats.mean(axis=0)
-        print(f"    {cls}: {len(samples)} samples → features computed")
+        print(f"    {cls}: {len(samples)} samples -> features computed")
     return means
 
 

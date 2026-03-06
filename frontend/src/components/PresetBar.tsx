@@ -22,7 +22,9 @@ const PRESET_GROUPS: PresetGroup[] = [
     presets: [
       { label: 'FM Radio',  startMhz: 87.5,   stopMhz: 108.0,  antenna: 'Large, 4 sections (~87 MHz)' },
       { label: 'Airband',   startMhz: 118.0,   stopMhz: 137.0,  antenna: 'Large, 3 sections (~115 MHz)' },
+      { label: 'DAB+',      startMhz: 174.0,   stopMhz: 230.0,  antenna: 'Large, 2 sections (~162 MHz)' },
       { label: 'PMR446',    startMhz: 446.0,   stopMhz: 446.2,  antenna: 'Small, 4 sections (~445 MHz)' },
+      { label: 'TETRA',     startMhz: 380.0,   stopMhz: 400.0,  antenna: 'Large, 1 section (~285 MHz)' },
       { label: 'ADS-B',     startMhz: 1089.0,  stopMhz: 1091.0, antenna: 'Small, 1 section (~1030 MHz)' },
     ],
   },
