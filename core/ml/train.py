@@ -71,8 +71,14 @@ def train(
     print(f"Train+val pool:   {len(trainval_indices)} samples")
 
     # --- Rotating validation: one model, cycle which fold is held out ---
-    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
-    splits = list(skf.split(trainval_indices, trainval_labels))
+    if n_folds < 2:
+        rng2 = np.random.default_rng(42)
+        perm = rng2.permutation(len(trainval_indices))
+        n_val = len(trainval_indices) // 5
+        splits = [(perm[n_val:], perm[:n_val])]
+    else:
+        skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
+        splits = list(skf.split(trainval_indices, trainval_labels))
 
     model = SignalCNN(dropout=dropout).to(device)
     n_params = sum(p.numel() for p in model.parameters())
