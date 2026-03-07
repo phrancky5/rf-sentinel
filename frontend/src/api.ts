@@ -75,7 +75,6 @@ export interface ScanSummary {
   gain: number;
   created_at: string;
   duration_s: number | null;
-  num_peaks: number;
 }
 
 export async function listScans(

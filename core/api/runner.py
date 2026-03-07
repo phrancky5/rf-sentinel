@@ -158,22 +158,9 @@ class JobRunner:
             self._current_sdr.stop_stream()
         return True
 
-    @staticmethod
-    def _log_peaks(job_id: str, peaks) -> None:
-        """Emit peak detection results to the log stream."""
-        if peaks:
-            _emit(job_id, f"  Found {len(peaks)} signal{'s' if len(peaks) != 1 else ''}")
-            for pk in peaks[:10]:
-                _emit(job_id, f"    {pk.freq_mhz:.3f} MHz  {pk.power_db:+.1f} dB  (BW ~{pk.bandwidth_khz:.0f} kHz)")
-            if len(peaks) > 10:
-                _emit(job_id, f"    ... and {len(peaks) - 10} more")
-        else:
-            _emit(job_id, "  No signals above noise floor")
-
-    def _finalize_job(self, job: Job, t0: float, peaks: list[dict]) -> None:
+    def _finalize_job(self, job: Job, t0: float) -> None:
         job.status = JobStatus.COMPLETE
         job.duration_s = round(time.time() - t0, 2)
-        job.params["peaks"] = peaks
         _emit_job_status(job)
         from core.api.db import save_scan
         save_scan(job)
@@ -186,9 +173,7 @@ class JobRunner:
         t0 = time.time()
 
         try:
-            from core.dsp import compute_waterfall, trim_waterfall, stitch_waterfalls, find_peaks
-            from core.dsp.peaks import find_maxhold_peaks
-            from core.dsp.classify import classify_peaks
+            from core.dsp import compute_waterfall, trim_waterfall, stitch_waterfalls
 
             segments, num_chunks = self._capture_segments(job, "Scan", compute_waterfall, trim_waterfall)
             if num_chunks > 1:
@@ -196,15 +181,6 @@ class JobRunner:
 
             _emit(job.id, "Stitching spectrum..." if num_chunks > 1 else "Processing...")
             result = stitch_waterfalls(segments)
-
-            _emit(job.id, "Detecting signals...")
-            mean_peaks = find_peaks(result.freqs_mhz, result.mean_psd_db)
-            raw_peaks = find_maxhold_peaks(
-                result.freqs_mhz, result.power_db, mean_peaks,
-            )
-            self._log_peaks(job.id, raw_peaks)
-            peaks = classify_peaks(result.freqs_mhz, result.mean_psd_db, raw_peaks,
-                                   waterfall_db=result.power_db)
 
             # 1D spectrum: send at full res (uPlot handles 25k+ points fine)
             spec_freqs = np.round(result.freqs_mhz, 4).tolist()
@@ -226,7 +202,7 @@ class JobRunner:
                 "power_db": spec_power,
             }
 
-            self._finalize_job(job, t0, peaks)
+            self._finalize_job(job, t0)
             _emit(job.id, f"Scan complete ({job.duration_s}s)")
 
         except (CancelledError, Exception) as e:

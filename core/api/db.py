@@ -32,23 +32,6 @@ CREATE TABLE IF NOT EXISTS scans (
 );
 CREATE INDEX IF NOT EXISTS idx_scans_created_at ON scans(created_at);
 
-CREATE TABLE IF NOT EXISTS signals (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    scan_id        TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
-    freq_mhz       REAL NOT NULL,
-    power_db       REAL NOT NULL,
-    prominence_db  REAL NOT NULL,
-    bandwidth_khz  REAL NOT NULL,
-    signal_type    TEXT,
-    confidence     REAL,
-    band           TEXT,
-    duty_cycle     REAL,
-    transient      INTEGER DEFAULT 0,
-    created_at     TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_signals_scan_id ON signals(scan_id);
-CREATE INDEX IF NOT EXISTS idx_signals_freq ON signals(freq_mhz);
-
 CREATE TABLE IF NOT EXISTS recordings (
     id             TEXT PRIMARY KEY,
     mode           TEXT NOT NULL,
@@ -92,10 +75,7 @@ def init(db_path: Path | None = None) -> None:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(signals)").fetchall()}
-    if "transient" not in cols:
-        conn.execute("ALTER TABLE signals ADD COLUMN transient INTEGER DEFAULT 0")
-        logger.info("Migration: added 'transient' column to signals")
+    pass
 
 
 def _compress(data: dict) -> bytes:
@@ -110,7 +90,6 @@ def save_scan(job) -> None:
     if not _conn:
         return
     p = job.params
-    peaks = p.get("peaks", [])
 
     spectrum_blob = _compress(p["spectrum_data"]) if "spectrum_data" in p else None
     waterfall_blob = _compress(p["waterfall_data"]) if "waterfall_data" in p else None
@@ -127,22 +106,8 @@ def save_scan(job) -> None:
              job.created_at.isoformat(), job.duration_s,
              spectrum_blob, waterfall_blob),
         )
-        for pk in peaks:
-            _conn.execute(
-                """INSERT INTO signals
-                   (scan_id, freq_mhz, power_db, prominence_db,
-                    bandwidth_khz, signal_type, confidence, band, duty_cycle,
-                    transient, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (job.id, pk["freq_mhz"], pk["power_db"],
-                 pk["prominence_db"], pk["bandwidth_khz"],
-                 pk.get("signal_type"), pk.get("confidence"),
-                 pk.get("band"), pk.get("duty_cycle"),
-                 int(pk.get("transient", False)),
-                 job.created_at.isoformat()),
-            )
         _conn.commit()
-    logger.info("Saved scan %s (%d peaks)", job.id[:8], len(peaks))
+    logger.info("Saved scan %s", job.id[:8])
 
 
 def list_scans(limit: int = 50, offset: int = 0) -> dict:
@@ -151,8 +116,7 @@ def list_scans(limit: int = 50, offset: int = 0) -> dict:
     total = _conn.execute("SELECT COUNT(*) FROM scans").fetchone()[0]
     rows = _conn.execute(
         """SELECT s.id, s.start_mhz, s.stop_mhz, s.duration, s.gain,
-                  s.created_at, s.duration_s,
-                  (SELECT COUNT(*) FROM signals WHERE scan_id = s.id) AS num_peaks
+                  s.created_at, s.duration_s
            FROM scans s ORDER BY s.created_at DESC LIMIT ? OFFSET ?""",
         (limit, offset),
     ).fetchall()
@@ -182,18 +146,6 @@ def get_scan(scan_id: str) -> dict | None:
     spectrum = _decompress(row.pop("spectrum_data")) if row.get("spectrum_data") else None
     waterfall = _decompress(row.pop("waterfall_data")) if row.get("waterfall_data") else None
 
-    signals = _conn.execute(
-        "SELECT * FROM signals WHERE scan_id = ? ORDER BY prominence_db DESC",
-        (scan_id,),
-    ).fetchall()
-    peaks = []
-    for s in signals:
-        d = dict(s)
-        d.pop("id", None)
-        d.pop("scan_id", None)
-        d["transient"] = bool(d.get("transient", 0))
-        peaks.append(d)
-
     return {
         "id": row["id"],
         "type": "scan",
@@ -203,7 +155,6 @@ def get_scan(scan_id: str) -> dict | None:
             "stop_mhz": row["stop_mhz"],
             "duration": row["duration"],
             "gain": row["gain"],
-            "peaks": peaks,
             **({"spectrum_data": spectrum} if spectrum else {}),
             **({"waterfall_data": waterfall} if waterfall else {}),
         },

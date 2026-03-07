@@ -1,4 +1,4 @@
-"""DSP module — spectrum analysis, PSD, waterfall, and peak detection."""
+"""DSP module — spectrum analysis, PSD, and waterfall."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from scipy.signal import welch, spectrogram
 
 from core.sdr import CaptureResult
 from core.dsp.types import SpectrumResult, WaterfallResult, DemodMode  # noqa: F401
-from core.dsp.peaks import SignalPeak, find_peaks                      # noqa: F401
 from core.dsp.demod import demodulate, DemodState, AUDIO_RATE           # noqa: F401
 from core.dsp.stitch import (                                 # noqa: F401
     SAMPLE_RATE, USABLE_BW_FRAC, STEP_HZ,

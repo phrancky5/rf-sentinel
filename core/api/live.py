@@ -15,6 +15,21 @@ from core.dsp.types import DemodMode
 
 logger = logging.getLogger("rfsentinel.runner")
 
+
+class _PsdSmoother:
+    """Exponential moving average over consecutive PSD frames (live mode)."""
+
+    def __init__(self, alpha: float = 0.3) -> None:
+        self._alpha = alpha
+        self._prev: np.ndarray | None = None
+
+    def update(self, power_db: np.ndarray) -> np.ndarray:
+        if self._prev is None or len(self._prev) != len(power_db):
+            self._prev = power_db.copy()
+            return power_db
+        self._prev[:] = self._alpha * power_db + (1 - self._alpha) * self._prev
+        return self._prev.copy()
+
 LIVE_PSD_NFFT = 2048
 LIVE_FRAME_DURATION_S = 0.1
 SPECTRUM_SEND_INTERVAL = 5
@@ -36,14 +51,12 @@ class LiveSession:
         self._demod_mode = DemodMode.FM
         self._demod_state = None
         self._vfo_freq_hz: Optional[float] = None
-        self._peak_tracker = None
         self._psd_smoother = None
         self._spectrum_queue: queue.Queue | None = None
         self._spectrum_thread: threading.Thread | None = None
 
     def _reset_dsp_state(self) -> None:
         self._demod_state = None
-        self._peak_tracker = None
         self._psd_smoother = None
 
     @staticmethod
@@ -186,32 +199,22 @@ class LiveSession:
                 pass
 
     def _send_spectrum(self, capture) -> None:
-        from core.dsp import compute_psd, find_peaks
-        from core.dsp.peaks import PsdSmoother
-        from core.dsp.tracker import PeakTracker
-        from core.dsp.classify import classify_peaks
+        from core.dsp import compute_psd
 
         result = compute_psd(capture, nfft=LIVE_PSD_NFFT)
 
         if self._psd_smoother is None:
-            self._psd_smoother = PsdSmoother()
+            self._psd_smoother = _PsdSmoother()
         smoothed = self._psd_smoother.update(result.power_db)
 
         step = max(1, len(result.freqs_mhz) // DOWNSAMPLE_POINTS)
         freqs = result.freqs_mhz[::step]
         power = smoothed[::step]
 
-        raw_peaks = find_peaks(result.freqs_mhz, smoothed)
-        if self._peak_tracker is None:
-            self._peak_tracker = PeakTracker()
-        tracked = self._peak_tracker.update(raw_peaks, result.freqs_mhz, smoothed)
-        classified = classify_peaks(result.freqs_mhz, smoothed, tracked)
-
         payload = json.dumps({
             "type": "spectrum",
             "freqs_mhz": freqs.tolist(),
             "power_db": power.tolist(),
-            "peaks": classified,
         })
         self._emit("__spectrum__", payload)
 

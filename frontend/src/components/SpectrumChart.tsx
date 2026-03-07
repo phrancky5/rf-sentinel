@@ -13,7 +13,6 @@ export interface ChartView {
 export interface SpectrumFrame {
   freqs_mhz: number[];
   power_db: number[];
-  peaks: { freq_mhz: number; power_db: number; bandwidth_khz: number; signal_type?: string; confidence?: number; duty_cycle?: number; transient?: boolean }[];
 }
 
 interface Props {
@@ -37,36 +36,8 @@ const GRID = 'rgba(255,255,255,0.08)';
 const AXIS = '#606070';
 const LINE = '#00d4ff';
 const FILL = 'rgba(0,212,255,0.12)';
-const PEAK = '#ff6b35';
 const MAX_HOLD_COLOR = 'rgba(255,100,50,0.25)';
 const VFO_COLOR = '#44ff44';
-
-export const TYPE_COLORS: Record<string, string> = {
-  fm_broadcast: '#ff6b35',
-  narrowband_fm: '#44aaff',
-  ofdm: '#ff44ff',
-  tdma: '#ff8800',
-  am_broadcast: '#44ff88',
-  carrier: '#ffdd44',
-  lora: '#00ffcc',
-  adsb: '#ff5252',
-  aviation: '#00e5ff',
-  ham: '#76ff03',
-  ism: '#e040fb',
-};
-export const TYPE_LABELS: Record<string, string> = {
-  fm_broadcast: 'FM',
-  narrowband_fm: 'NFM',
-  ofdm: 'OFDM',
-  tdma: 'TDMA',
-  am_broadcast: 'AM',
-  carrier: 'CW',
-  lora: 'LoRa',
-  adsb: 'ADS-B',
-  aviation: 'AIR',
-  ham: 'HAM',
-  ism: 'ISM',
-};
 
 // ── Plugins ──────────────────────────────────────────────
 
@@ -89,77 +60,6 @@ function bgPlugin(): uPlot.Plugin {
   };
 }
 
-function peakMarkersPlugin(
-  peaksRef: React.MutableRefObject<SpectrumFrame['peaks']>,
-): uPlot.Plugin {
-  return {
-    hooks: {
-      draw: (u: uPlot) => {
-        const peaks = peaksRef.current;
-        if (!peaks.length) return;
-
-        const { ctx, bbox } = u;
-        const dpr = uPlot.pxRatio;
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(bbox.left, bbox.top, bbox.width, bbox.height);
-        ctx.clip();
-
-        ctx.font = `bold ${Math.round(9 * dpr)}px monospace`;
-        ctx.textAlign = 'center';
-
-        const visible = peaks.filter(pk => {
-          const x = u.valToPos(pk.freq_mhz, 'x', true);
-          return x >= bbox.left && x <= bbox.left + bbox.width;
-        });
-        const labelGap = 50 * dpr;
-        let lastLabelX = -Infinity;
-        for (const pk of visible) {
-          const x = u.valToPos(pk.freq_mhz, 'x', true);
-          const color = (pk.signal_type && TYPE_COLORS[pk.signal_type]) || '#888888';
-          ctx.fillStyle = color;
-
-          const s = 4 * dpr;
-          let markerY: number;
-          if (pk.transient) {
-            const freqs = u.data[0] as number[];
-            const psd = u.data[1] as number[];
-            let psdDb = pk.power_db;
-            if (freqs.length > 1) {
-              const step = freqs[1] - freqs[0];
-              const idx = Math.round((pk.freq_mhz - freqs[0]) / step);
-              if (idx >= 0 && idx < psd.length) psdDb = psd[idx];
-            }
-            markerY = u.valToPos(psdDb, 'y', true);
-            ctx.beginPath();
-            ctx.arc(x, markerY - 5 * dpr, s, 0, Math.PI * 2);
-            ctx.fill();
-          } else {
-            markerY = u.valToPos(pk.power_db, 'y', true);
-            ctx.beginPath();
-            ctx.moveTo(x, markerY - 8 * dpr);
-            ctx.lineTo(x - s, markerY - 2 * dpr);
-            ctx.lineTo(x + s, markerY - 2 * dpr);
-            ctx.closePath();
-            ctx.fill();
-          }
-
-          if (x - lastLabelX >= labelGap) {
-            lastLabelX = x;
-            const label = pk.signal_type ? TYPE_LABELS[pk.signal_type] : undefined;
-            ctx.fillText(`${pk.freq_mhz.toFixed(3)}`, x, markerY - 11 * dpr);
-            if (label) {
-              const conf = pk.confidence != null ? ` ${Math.round(pk.confidence * 100)}%` : '';
-              ctx.fillText(label + conf, x, markerY - 20 * dpr);
-            }
-          }
-        }
-        ctx.restore();
-      },
-    },
-  };
-}
-
 function vfoPlugin(
   vfoRef: React.MutableRefObject<number | null>,
   cbRef: React.MutableRefObject<((freq_mhz: number) => void) | undefined>,
@@ -169,11 +69,8 @@ function vfoPlugin(
   dataXMaxRef: React.MutableRefObject<number>,
   setXStart: (v: number) => void,
   setXEnd: (v: number) => void,
-  peaksRef: React.MutableRefObject<SpectrumFrame['peaks']>,
-  modeRef: React.MutableRefObject<string>,
 ): uPlot.Plugin {
   const HIT_PX = 8;
-  const PEAK_HIT_PX = 12;
   const DRAG_THRESHOLD = 4;
   let dragging: 'vfo' | 'pan' | false = false;
   let suppressClick = false;
@@ -220,29 +117,12 @@ function vfoPlugin(
           return Math.abs(cx - vx) < HIT_PX;
         };
 
-        const nearPeak = (cx: number, cy: number) => {
-          let bestPk: SpectrumFrame['peaks'][0] | null = null;
-          let bestDist = PEAK_HIT_PX;
-          for (const pk of peaksRef.current) {
-            const px = u.valToPos(pk.freq_mhz, 'x');
-            const py = u.valToPos(pk.power_db, 'y');
-            const dist = Math.hypot(cx - px, cy - py);
-            if (dist < bestDist) { bestDist = dist; bestPk = pk; }
-          }
-          return bestPk;
-        };
-
         over.addEventListener('mousemove', (e: MouseEvent) => {
           if (dragging) return;
           const rect = over.getBoundingClientRect();
           const cx = e.clientX - rect.left;
-          const cy = e.clientY - rect.top;
           if (nearVfo(cx)) { over.style.cursor = 'ew-resize'; return; }
-          if (modeRef.current === 'scan' && cbRef.current) {
-            over.style.cursor = nearPeak(cx, cy) ? 'pointer' : 'crosshair';
-          } else {
-            over.style.cursor = 'crosshair';
-          }
+          over.style.cursor = 'crosshair';
         });
 
         over.addEventListener('mousedown', (e: MouseEvent) => {
@@ -308,14 +188,8 @@ function vfoPlugin(
           if (!cbRef.current || suppressClick) { suppressClick = false; return; }
           const rect = over.getBoundingClientRect();
           const cx = e.clientX - rect.left;
-          const cy = e.clientY - rect.top;
           if (nearVfo(cx)) return;
-          if (modeRef.current === 'scan') {
-            const pk = nearPeak(cx, cy);
-            if (pk) cbRef.current(pk.freq_mhz);
-          } else {
-            cbRef.current(u.posToVal(cx, 'x'));
-          }
+          cbRef.current(u.posToVal(cx, 'x'));
         });
       },
     },
@@ -378,7 +252,6 @@ export default function SpectrumChart({
   const wrapRef = useRef<HTMLDivElement>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
-  const peaksRef = useRef<SpectrumFrame['peaks']>([]);
   const maxHoldRef = useRef<number[] | null>(null);
   const onFreqClickRef = useRef(onFreqClick);
   onFreqClickRef.current = onFreqClick;
@@ -386,8 +259,6 @@ export default function SpectrumChart({
   onViewChangeRef.current = onViewChange;
   const vfoRef = useRef<number | null>(vfoFreq ?? null);
   vfoRef.current = vfoFreq ?? null;
-  const modeRef = useRef(mode);
-  modeRef.current = mode;
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 400, h: 300 });
   const [yLo, setYLo, yLoRef] = useStateRef(-150);
   const [yHi, setYHi, yHiRef] = useStateRef(0);
@@ -497,8 +368,7 @@ export default function SpectrumChart({
       legend: { show: false },
       plugins: [
         bgPlugin(),
-        peakMarkersPlugin(peaksRef),
-        vfoPlugin(vfoRef, onFreqClickRef, xStartRef, xEndRef, dataXMinRef, dataXMaxRef, setXStart, setXEnd, peaksRef, modeRef),
+        vfoPlugin(vfoRef, onFreqClickRef, xStartRef, xEndRef, dataXMinRef, dataXMaxRef, setXStart, setXEnd),
         wheelZoomPlugin(xStartRef, xEndRef, dataXMinRef, dataXMaxRef, setXStart, setXEnd),
       ],
     };
@@ -521,8 +391,7 @@ export default function SpectrumChart({
     const chart = chartRef.current;
     if (!chart || !frame || !frame.freqs_mhz.length) return;
 
-    const { freqs_mhz, power_db, peaks } = frame;
-    peaksRef.current = peaks;
+    const { freqs_mhz, power_db } = frame;
 
     let fMin = Infinity, fMax = -Infinity;
     for (let i = 0; i < power_db.length; i++) {
@@ -605,22 +474,16 @@ export default function SpectrumChart({
 
   const fMin = frame?.freqs_mhz?.[0];
   const fMax = frame?.freqs_mhz?.[frame?.freqs_mhz?.length - 1];
-  const peakCount = frame?.peaks?.length ?? 0;
 
   const xSliderMarkers: SliderMarker[] = [];
-  if (frame?.peaks) {
-    for (const pk of frame.peaks) {
-      xSliderMarkers.push({ pos: pk.freq_mhz, color: PEAK });
-    }
-  }
   if (vfoFreq != null) {
     xSliderMarkers.push({ pos: vfoFreq, color: VFO_COLOR });
   }
 
   const ySliderMarkers: SliderMarker[] = [];
   if (dbRangeRef.current) {
-    ySliderMarkers.push({ pos: dbRangeRef.current.min, color: PEAK });
-    ySliderMarkers.push({ pos: dbRangeRef.current.max, color: PEAK });
+    ySliderMarkers.push({ pos: dbRangeRef.current.min, color: '#ff6b35' });
+    ySliderMarkers.push({ pos: dbRangeRef.current.max, color: '#ff6b35' });
   }
 
   return (
@@ -634,11 +497,6 @@ export default function SpectrumChart({
             {mode === 'live' ? 'LIVE' : 'SCAN'}
             {fMin != null && fMax != null && ` — ${fMin.toFixed(1)}–${fMax.toFixed(1)} MHz`}
           </span>
-          {peakCount > 0 && (
-            <span className="text-xs text-gray-500">
-              ({peakCount} signal{peakCount !== 1 ? 's' : ''})
-            </span>
-          )}
         </div>
       </div>
       <div className="flex flex-1 min-h-0">
