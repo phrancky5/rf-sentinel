@@ -22,7 +22,6 @@ interface Props {
   vfoFreq?: number | null;
   onFreqClick?: (freq_mhz: number) => void;
   onViewChange?: (view: ChartView) => void;
-  narrowBw?: number;
 }
 
 function useStateRef<T>(init: T): [T, (v: T) => void, React.MutableRefObject<T>] {
@@ -323,49 +322,6 @@ function vfoPlugin(
   };
 }
 
-const REC_BW_LINE = 'rgba(239,68,68,0.5)';
-const REC_BW_FILL = 'rgba(239,68,68,0.06)';
-
-function recBwPlugin(
-  vfoRef: React.MutableRefObject<number | null>,
-  narrowBwRef: React.MutableRefObject<number>,
-): uPlot.Plugin {
-  return {
-    hooks: {
-      draw: (u: uPlot) => {
-        const vfo = vfoRef.current;
-        if (vfo == null) return;
-        const bwMhz = narrowBwRef.current / 1000;
-        const loFreq = vfo - bwMhz / 2;
-        const hiFreq = vfo + bwMhz / 2;
-        const { ctx, bbox } = u;
-        const dpr = uPlot.pxRatio;
-        const xLo = u.valToPos(loFreq, 'x', true);
-        const xHi = u.valToPos(hiFreq, 'x', true);
-        const left = Math.max(xLo, bbox.left);
-        const right = Math.min(xHi, bbox.left + bbox.width);
-        if (left >= bbox.left + bbox.width || right <= bbox.left) return;
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(bbox.left, bbox.top, bbox.width, bbox.height);
-        ctx.clip();
-        ctx.fillStyle = REC_BW_FILL;
-        ctx.fillRect(left, bbox.top, right - left, bbox.height);
-        ctx.strokeStyle = REC_BW_LINE;
-        ctx.lineWidth = 1 * dpr;
-        ctx.setLineDash([4 * dpr, 4 * dpr]);
-        for (const x of [xLo, xHi]) {
-          if (x < bbox.left || x > bbox.left + bbox.width) continue;
-          ctx.beginPath();
-          ctx.moveTo(x, bbox.top);
-          ctx.lineTo(x, bbox.top + bbox.height);
-          ctx.stroke();
-        }
-        ctx.restore();
-      },
-    },
-  };
-}
 
 function wheelZoomPlugin(
   xStartRef: React.MutableRefObject<number>,
@@ -417,7 +373,7 @@ const XZOOM_H = 24;
 const YZOOM_W = 24;
 
 export default function SpectrumChart({
-  frame, mode, vfoFreq, onFreqClick, onViewChange, narrowBw,
+  frame, mode, vfoFreq, onFreqClick, onViewChange,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -432,8 +388,6 @@ export default function SpectrumChart({
   vfoRef.current = vfoFreq ?? null;
   const modeRef = useRef(mode);
   modeRef.current = mode;
-  const narrowBwRef = useRef(narrowBw ?? 25);
-  narrowBwRef.current = narrowBw ?? 25;
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 400, h: 300 });
   const [yLo, setYLo, yLoRef] = useStateRef(-150);
   const [yHi, setYHi, yHiRef] = useStateRef(0);
@@ -543,7 +497,6 @@ export default function SpectrumChart({
       legend: { show: false },
       plugins: [
         bgPlugin(),
-        recBwPlugin(vfoRef, narrowBwRef),
         peakMarkersPlugin(peaksRef),
         vfoPlugin(vfoRef, onFreqClickRef, xStartRef, xEndRef, dataXMinRef, dataXMaxRef, setXStart, setXEnd, peaksRef, modeRef),
         wheelZoomPlugin(xStartRef, xEndRef, dataXMinRef, dataXMaxRef, setXStart, setXEnd),

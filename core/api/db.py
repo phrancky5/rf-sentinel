@@ -213,59 +213,5 @@ def get_scan(scan_id: str) -> dict | None:
     }
 
 
-# ── Recordings ────────────────────────────────────────
-
-RECORDINGS_DIR = DB_DIR / "recordings"
-
-
-def save_recording(meta: dict) -> None:
-    if not _conn:
-        return
-    with _lock:
-        _conn.execute(
-            """INSERT INTO recordings
-               (id, mode, filename, freq_mhz, bandwidth_khz, sample_rate,
-                gain, start_mhz, stop_mhz, num_samples, file_size,
-                created_at, stopped_at, duration_s)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (meta["id"], meta["mode"], meta["filename"], meta["freq_mhz"],
-             meta.get("bandwidth_khz"), meta["sample_rate"], meta["gain"],
-             meta["start_mhz"], meta["stop_mhz"], meta["num_samples"],
-             meta["file_size"], meta["created_at"], meta["stopped_at"],
-             meta["duration_s"]),
-        )
-        _conn.commit()
-    logger.info("Saved recording %s (%s, %.1f MHz, %.1fs)",
-                meta["id"][:8], meta["mode"], meta["freq_mhz"], meta["duration_s"])
-
-
-def list_recordings(limit: int = 50, offset: int = 0) -> dict:
-    if not _conn:
-        return {"recordings": [], "total": 0}
-    total = _conn.execute("SELECT COUNT(*) FROM recordings").fetchone()[0]
-    rows = _conn.execute(
-        """SELECT id, mode, filename, freq_mhz, bandwidth_khz, sample_rate,
-                  gain, start_mhz, stop_mhz, num_samples, file_size,
-                  created_at, stopped_at, duration_s
-           FROM recordings ORDER BY created_at DESC LIMIT ? OFFSET ?""",
-        (limit, offset),
-    ).fetchall()
-    return {"recordings": [dict(r) for r in rows], "total": total}
-
-
-def delete_recording(rec_id: str) -> bool:
-    if not _conn:
-        return False
-    row = _conn.execute("SELECT filename FROM recordings WHERE id = ?", (rec_id,)).fetchone()
-    if not row:
-        return False
-    filepath = RECORDINGS_DIR / row["filename"]
-    with _lock:
-        _conn.execute("DELETE FROM recordings WHERE id = ?", (rec_id,))
-        _conn.commit()
-    if filepath.exists():
-        filepath.unlink()
-    logger.info("Deleted recording %s", rec_id[:8])
-    return True
 
 

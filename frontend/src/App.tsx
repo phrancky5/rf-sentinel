@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useWebSocket, LogEntry } from './hooks/useWebSocket';
 import { useAudioPlayer } from './hooks/useAudioPlayer';
-import { JobInfo, setVfo, toggleAudio, getScan, cancelJob, deleteScan, startRecording, stopRecording } from './api';
+import { JobInfo, setVfo, toggleAudio, getScan, cancelJob, deleteScan } from './api';
 import ControlPanel, { ControlPanelHandle } from './components/ControlPanel';
 import LogConsole from './components/LogConsole';
 import JobList from './components/JobList';
@@ -116,8 +116,8 @@ function SignalTable({ peaks, vfoFreq, onFreqClick, showSteady, showTransient, o
   );
 }
 
-function Header({ liveActive, audioEnabled, recording, serverOnline }: {
-  liveActive: boolean; audioEnabled: boolean; recording: string | null; serverOnline: boolean;
+function Header({ liveActive, audioEnabled, serverOnline }: {
+  liveActive: boolean; audioEnabled: boolean; serverOnline: boolean;
 }) {
   return (
     <header className="border-b border-gray-800 px-4 py-2.5 flex items-center justify-between">
@@ -131,11 +131,6 @@ function Header({ liveActive, audioEnabled, recording, serverOnline }: {
         {liveActive && (
           <span className="text-xs px-2 py-0.5 rounded bg-red-500/15 text-red-300 font-mono animate-pulse">
             ● LIVE
-          </span>
-        )}
-        {recording && (
-          <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-400 font-mono animate-pulse">
-            ● REC {recording.toUpperCase()}
           </span>
         )}
         {audioEnabled && (
@@ -154,7 +149,7 @@ function Header({ liveActive, audioEnabled, recording, serverOnline }: {
   );
 }
 
-function Sidebar({ controlPanelRef, liveActive, audioEnabled, onLiveToggle, onAudioToggle, onVolumeChange, vfoFreq, onVfoChange, jobs, selectedJob, onSelectJob, onCancelJob, onDeleteScan, recording, onRecord, narrowBw, onNarrowBwChange }: {
+function Sidebar({ controlPanelRef, liveActive, audioEnabled, onLiveToggle, onAudioToggle, onVolumeChange, vfoFreq, onVfoChange, jobs, selectedJob, onSelectJob, onCancelJob, onDeleteScan }: {
   controlPanelRef: React.Ref<ControlPanelHandle>;
   liveActive: boolean;
   audioEnabled: boolean;
@@ -168,10 +163,6 @@ function Sidebar({ controlPanelRef, liveActive, audioEnabled, onLiveToggle, onAu
   onSelectJob: (job: JobInfo | null) => void;
   onCancelJob: (jobId: string) => void;
   onDeleteScan: (scanId: string) => void;
-  recording: string | null;
-  onRecord: (mode: 'wide' | 'narrow', bandwidthKhz?: number) => void;
-  narrowBw: number;
-  onNarrowBwChange: (bw: number) => void;
 }) {
   return (
     <aside className="w-72 border-r border-gray-800 flex flex-col">
@@ -185,10 +176,6 @@ function Sidebar({ controlPanelRef, liveActive, audioEnabled, onLiveToggle, onAu
           onVolumeChange={onVolumeChange}
           vfoFreq={vfoFreq}
           onVfoChange={onVfoChange}
-          recording={recording}
-          onRecord={onRecord}
-          narrowBw={narrowBw}
-          onNarrowBwChange={onNarrowBwChange}
         />
       </div>
       <div className="flex-1 overflow-y-auto p-3">
@@ -226,7 +213,7 @@ function SignalPanel({ peaks, vfoFreq, onPeakClick, showSteady, showTransient, o
   );
 }
 
-function MainContent({ liveActive, liveFrame, selectedJob, logs, connected, onClear, vfoFreq, onFreqClick, onScanFreqClick, peakFilter, narrowBw }: {
+function MainContent({ liveActive, liveFrame, selectedJob, logs, connected, onClear, vfoFreq, onFreqClick, onScanFreqClick, peakFilter }: {
   liveActive: boolean;
   liveFrame: SpectrumFrame | null;
   selectedJob: JobInfo | null;
@@ -237,7 +224,6 @@ function MainContent({ liveActive, liveFrame, selectedJob, logs, connected, onCl
   onFreqClick: (freq_mhz: number) => void;
   onScanFreqClick: (freq_mhz: number) => void;
   peakFilter: (pk: { transient?: boolean }) => boolean;
-  narrowBw: number;
 }) {
   const [chartView, setChartView] = useState<ChartView | null>(null);
 
@@ -247,7 +233,7 @@ function MainContent({ liveActive, liveFrame, selectedJob, logs, connected, onCl
         {liveActive || liveFrame ? (
           <>
             <div className="flex-[2] min-h-0">
-              <SpectrumChart frame={liveFrame} mode="live" vfoFreq={vfoFreq} onFreqClick={onFreqClick} onViewChange={setChartView} narrowBw={narrowBw} />
+              <SpectrumChart frame={liveFrame} mode="live" vfoFreq={vfoFreq} onFreqClick={onFreqClick} onViewChange={setChartView} />
             </div>
             <div className="flex-1 min-h-0 border-t border-gray-800/50">
               <WaterfallCanvas frame={liveFrame} view={chartView} />
@@ -274,8 +260,6 @@ export default function App() {
   const [showSteady, setShowSteady] = useState(true);
   const [showTransient, setShowTransient] = useState(true);
   const [vfoFreq, setVfoFreq] = useState<number | null>(null);
-  const [recording, setRecording] = useState<string | null>(null);
-  const [narrowBw, setNarrowBw] = useState(25);
   const audioRef = useRef(audio);
   audioRef.current = audio;
   const vfoRef = useRef<number | null>(null);
@@ -288,7 +272,6 @@ export default function App() {
       power_db: data.power_db,
       peaks: data.peaks,
     });
-    setRecording(data.recording ?? null);
     const center = (freqs[0] + freqs[freqs.length - 1]) / 2;
     const prev = vfoRef.current;
     if (prev != null) {
@@ -344,7 +327,6 @@ export default function App() {
       setLiveFrame(null);
       setAudioEnabled(false);
       setVfoFreq(null);
-      setRecording(null);
       audio.stop();
     }
   }, [audio]);
@@ -369,21 +351,13 @@ export default function App() {
     }).catch(() => {});
   }, [setJobs]);
 
-  const handleRecord = useCallback((mode: 'wide' | 'narrow', bandwidthKhz?: number) => {
-    if (recording) {
-      stopRecording().catch(() => {});
-    } else {
-      startRecording(mode, bandwidthKhz).catch(() => {});
-    }
-  }, [recording]);
-
   const handleScanPeakClick = useCallback((freq_mhz: number) => {
     controlPanelRef.current?.goLiveAt(freq_mhz);
   }, []);
 
   return (
     <div className="min-h-screen bg-[#0a0e1a] text-gray-100">
-      <Header liveActive={liveActive} audioEnabled={audioEnabled} recording={recording} serverOnline={connected} />
+      <Header liveActive={liveActive} audioEnabled={audioEnabled} serverOnline={connected} />
       <div className="flex h-[calc(100vh-45px)]">
         <Sidebar
           controlPanelRef={controlPanelRef}
@@ -399,10 +373,6 @@ export default function App() {
           onSelectJob={handleSelectJob}
           onCancelJob={handleCancelJob}
           onDeleteScan={handleDeleteScan}
-          recording={recording}
-          onRecord={handleRecord}
-          narrowBw={narrowBw}
-          onNarrowBwChange={setNarrowBw}
         />
         <MainContent
           liveActive={liveActive}
@@ -415,7 +385,6 @@ export default function App() {
           onFreqClick={handleFreqClick}
           onScanFreqClick={handleScanPeakClick}
           peakFilter={peakFilter}
-          narrowBw={narrowBw}
         />
         <SignalPanel
           peaks={liveActive ? (liveFrame?.peaks || []) : (selectedJob?.status === 'complete' ? selectedJob.params.peaks ?? [] : [])}
