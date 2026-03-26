@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useState, useCallback, useEffect, useRef, useImperativeHandle } from 'react';
 import { startScan, startLive, retuneLive, stopLive, toggleAudio } from '../api';
+import { useApp } from '../AppContext';
 import ModeSelector, { Mode } from './ModeSelector';
 import PresetBar from './PresetBar';
 import ParamSlider from './ParamSlider';
@@ -10,22 +11,13 @@ export interface ControlPanelHandle {
   goLiveAt: (freq_mhz: number) => void;
 }
 
-interface Props {
-  liveActive: boolean;
-  onLiveToggle: (active: boolean) => void;
-  audioEnabled: boolean;
-  onAudioToggle: (enabled: boolean) => void;
-  onVolumeChange: (v: number) => void;
-  vfoFreq: number | null;
-  onVfoChange: (freq_mhz: number) => void;
-}
-
 const submitBtn = 'w-full py-2.5 rounded-lg font-medium text-sm transition-all';
 const submitBtnDisabled = 'bg-gray-700 text-gray-400 cursor-not-allowed';
 const submitBtnLiveActive = 'bg-red-600 hover:bg-red-500 text-white animate-pulse';
 const submitBtnLive = 'bg-red-600 hover:bg-red-500 text-white';
 const submitBtnScan = 'bg-cyan-600 hover:bg-cyan-500 text-white glow-accent';
 const sectionToggle = 'flex items-center justify-between w-full text-xs text-gray-400 hover:text-gray-200 transition-colors';
+
 function ScanInfo({ bandwidth, numChunks, duration }: { bandwidth: number; numChunks: number; duration: number }) {
   const formatEst = () => {
     const total = numChunks * duration;
@@ -43,7 +35,13 @@ function ScanInfo({ bandwidth, numChunks, duration }: { bandwidth: number; numCh
   );
 }
 
-export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liveActive, onLiveToggle, audioEnabled, onAudioToggle, onVolumeChange, vfoFreq, onVfoChange }, ref) {
+export default function ControlPanel() {
+  const {
+    controlPanelRef, liveActive, handleLiveToggle,
+    audioEnabled, handleAudioToggle, setVolume: setAudioVolume,
+    vfoFreq, handleFreqClick,
+  } = useApp();
+
   const [mode, setMode] = useState<Mode>('live');
   const [startMhz, setStartMhz] = useState(85.0);
   const [stopMhz, setStopMhz] = useState(140.0);
@@ -113,9 +111,9 @@ export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liv
         audio_enabled: true,
         demod_mode: demodMode,
       });
-      onLiveToggle(true);
+      handleLiveToggle(true);
       await toggleAudio({ enabled: true, demod_mode: demodMode });
-      onAudioToggle(true);
+      handleAudioToggle(true);
     } catch (e) {
       console.error('Failed to start live:', e);
     } finally {
@@ -123,7 +121,7 @@ export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liv
     }
   };
 
-  useImperativeHandle(ref, () => ({
+  useImperativeHandle(controlPanelRef, () => ({
     goLiveAt(freq_mhz: number) {
       if (liveActive) return;
       setMode('live');
@@ -138,8 +136,8 @@ export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liv
     if (isLive) {
       if (liveActive) {
         await stopLive();
-        onLiveToggle(false);
-        onAudioToggle(false);
+        handleLiveToggle(false);
+        handleAudioToggle(false);
       } else {
         await doStartLive(centerMhz);
       }
@@ -165,16 +163,16 @@ export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liv
   const handleModeChange = useCallback(async (newMode: Mode) => {
     if (liveActive && newMode !== 'live') {
       await stopLive();
-      onLiveToggle(false);
-      onAudioToggle(false);
+      handleLiveToggle(false);
+      handleAudioToggle(false);
     }
     setMode(newMode);
-  }, [liveActive, onLiveToggle, onAudioToggle]);
+  }, [liveActive, handleLiveToggle, handleAudioToggle]);
 
   const handleVolumeChange = useCallback((v: number) => {
     setVolume(v);
-    onVolumeChange(v / 100);
-  }, [onVolumeChange]);
+    setAudioVolume(v / 100);
+  }, [setAudioVolume]);
 
   const numChunks = Math.max(1, Math.ceil(bandwidth / (2.048 * 0.8)));
 
@@ -212,7 +210,7 @@ export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liv
                   <FreqInput
                     label="VFO Freq"
                     value={vfoFreq}
-                    onChange={onVfoChange}
+                    onChange={handleFreqClick}
                     min={+(centerMhz - 1.0).toFixed(1)}
                     max={+(centerMhz + 1.0).toFixed(1)}
                   />
@@ -260,7 +258,7 @@ export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liv
       <AudioControls
         liveActive={liveActive}
         audioEnabled={audioEnabled}
-        onToggle={onAudioToggle}
+        onToggle={handleAudioToggle}
         demodMode={demodMode}
         onDemodModeChange={setDemodMode}
         volume={volume}
@@ -269,4 +267,4 @@ export default forwardRef<ControlPanelHandle, Props>(function ControlPanel({ liv
 
     </div>
   );
-});
+}

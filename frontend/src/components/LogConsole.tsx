@@ -1,17 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { LogEntry } from '../hooks/useWebSocket';
-
-interface Props {
-  logs: LogEntry[];
-  connected: boolean;
-  onClear: () => void;
-}
+import { useApp } from '../AppContext';
 
 const statusDot = 'w-2 h-2 rounded-full';
 const logRow = 'text-gray-300';
 const headerBtn = 'text-xs text-gray-500 hover:text-gray-300 transition-colors';
 
-export default function LogConsole({ logs, connected, onClear }: Props) {
+export default function LogConsole() {
+  const { logs, connected, clearLogs: onClear } = useApp();
   const [collapsed, setCollapsed] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 

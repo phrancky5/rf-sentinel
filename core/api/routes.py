@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from core.api.models import ScanRequest, LiveRequest, RetuneRequest, AudioToggleRequest, VfoRequest
 from core.api.runner import JobRunner
+from core.api.db import list_scans, get_scan, delete_scan as db_delete
 
 
 def create_routes(runner: JobRunner) -> APIRouter:
@@ -64,12 +65,10 @@ def create_routes(runner: JobRunner) -> APIRouter:
 
     @router.get("/api/scans")
     async def get_scan_history(limit: int = 50, offset: int = 0):
-        from core.api.db import list_scans
         return list_scans(limit, offset)
 
     @router.get("/api/scans/{scan_id}")
     async def get_scan_detail(scan_id: str):
-        from core.api.db import get_scan
         result = get_scan(scan_id)
         if not result:
             return JSONResponse({"error": "Scan not found"}, status_code=404)
@@ -77,7 +76,6 @@ def create_routes(runner: JobRunner) -> APIRouter:
 
     @router.delete("/api/scans/{scan_id}")
     async def delete_scan(scan_id: str):
-        from core.api.db import delete_scan as db_delete
         runner.jobs.pop(scan_id, None)
         if db_delete(scan_id):
             return {"status": "deleted"}

@@ -1,13 +1,6 @@
 import { useState } from 'react';
 import { JobInfo } from '../api';
-
-interface Props {
-  jobs: JobInfo[];
-  onSelectJob: (job: JobInfo) => void;
-  selectedJobId: string | null;
-  onCancel?: (jobId: string) => void;
-  onDelete?: (jobId: string) => void;
-}
+import { useApp } from '../AppContext';
 
 const STATUS_STYLE: Record<string, string> = {
   pending: 'bg-yellow-500/20 text-yellow-300',
@@ -97,7 +90,9 @@ function JobCard({ job, selected, onSelect, onCancel, onDelete }: {
   );
 }
 
-export default function JobList({ jobs, onSelectJob, selectedJobId, onCancel, onDelete }: Props) {
+export default function JobList() {
+  const { jobs, selectedJob, handleSelectJob, handleCancelJob, handleDeleteScan } = useApp();
+
   if (jobs.length === 0) {
     return (
       <div className="text-center py-8 text-gray-600 text-sm italic">
@@ -112,10 +107,10 @@ export default function JobList({ jobs, onSelectJob, selectedJobId, onCancel, on
         <JobCard
           key={job.id}
           job={job}
-          selected={selectedJobId === job.id}
-          onSelect={onSelectJob}
-          onCancel={onCancel}
-          onDelete={onDelete}
+          selected={selectedJob?.id === job.id}
+          onSelect={handleSelectJob}
+          onCancel={handleCancelJob}
+          onDelete={handleDeleteScan}
         />
       ))}
     </div>

@@ -100,6 +100,3 @@ export async function deleteScan(scanId: string): Promise<{ status: string }> {
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
 }
-
-
-

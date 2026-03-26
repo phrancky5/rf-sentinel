@@ -1,13 +1,9 @@
 import { useCallback, useRef, useState } from 'react';
 import { JobInfo } from '../api';
+import { useApp } from '../AppContext';
 import SpectrumChart, { ChartView } from './SpectrumChart';
 import DualRangeSlider from './DualRangeSlider';
 import WaterfallCanvas from './WaterfallCanvas';
-
-interface Props {
-  job: JobInfo | null;
-  onFreqClick?: (freq_mhz: number) => void;
-}
 
 function EmptyState() {
   return (
@@ -117,7 +113,9 @@ function ScanResult({ job, onFreqClick }: { job: JobInfo; onFreqClick?: (freq_mh
   );
 }
 
-export default function ResultView({ job, onFreqClick }: Props) {
+export default function ResultView() {
+  const { selectedJob: job, handleScanPeakClick } = useApp();
+
   if (!job) return <EmptyState />;
   if (job.status === 'pending' || job.status === 'running') return <LoadingState job={job} />;
   if (job.status === 'error') return <ErrorState job={job} />;
@@ -126,7 +124,7 @@ export default function ResultView({ job, onFreqClick }: Props) {
     <div className="flex flex-col h-full">
       <JobHeader job={job} />
       <div className="flex-1 min-h-0">
-        <ScanResult job={job} onFreqClick={onFreqClick} />
+        <ScanResult job={job} onFreqClick={handleScanPeakClick} />
       </div>
     </div>
   );

@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from core.api.models import JobStatus
 from core.api.live import LiveSession
+from core.api.db import save_scan
 import numpy as np
 
 logger = logging.getLogger("rfsentinel.runner")
@@ -38,45 +39,30 @@ class Job:
     cancel: threading.Event = field(default_factory=threading.Event)
 
 
-# Global callbacks — set by the server to push messages via WebSocket
-_log_callback: Optional[Callable[[str, str], None]] = None
-_audio_callback: Optional[Callable[[bytes], None]] = None
-_job_status_callback: Optional[Callable[[dict], None]] = None
+class JobRunner:
+    """Manages background SDR jobs."""
 
+    def __init__(self, log_cb: Callable[[str, str], None],
+                 audio_cb: Callable[[bytes], None],
+                 job_status_cb: Callable[[dict], None]) -> None:
+        self._log_cb = log_cb
+        self._audio_cb = audio_cb
+        self._job_status_cb = job_status_cb
+        self.jobs: dict[str, Job] = {}
+        self._pool = ThreadPoolExecutor(max_workers=1)
+        self.live = LiveSession(emit=self._emit, emit_audio=self._emit_audio)
+        self._current_sdr = None
 
-def set_log_callback(cb: Callable[[str, str], None]) -> None:
-    global _log_callback
-    _log_callback = cb
+    def _emit(self, job_id: str, msg: str) -> None:
+        if job_id != "__spectrum__":
+            logger.info(f"[{job_id[:8]}] {msg}")
+        self._log_cb(job_id, msg)
 
+    def _emit_audio(self, pcm_bytes: bytes) -> None:
+        self._audio_cb(pcm_bytes)
 
-def set_audio_callback(cb: Callable[[bytes], None]) -> None:
-    global _audio_callback
-    _audio_callback = cb
-
-
-def set_job_status_callback(cb: Callable[[dict], None]) -> None:
-    global _job_status_callback
-    _job_status_callback = cb
-
-
-def _emit(job_id: str, msg: str) -> None:
-    """Send a log line to the WebSocket callback."""
-    if job_id != "__spectrum__":
-        logger.info(f"[{job_id[:8]}] {msg}")
-    if _log_callback:
-        _log_callback(job_id, msg)
-
-
-def _emit_audio(pcm_bytes: bytes) -> None:
-    """Send binary PCM audio to the WebSocket callback."""
-    if _audio_callback:
-        _audio_callback(pcm_bytes)
-
-
-def _emit_job_status(job: "Job") -> None:
-    """Push job status update to the WebSocket callback."""
-    if _job_status_callback:
-        _job_status_callback({
+    def _emit_job_status(self, job: Job) -> None:
+        self._job_status_cb({
             "id": job.id,
             "type": job.type,
             "status": job.status.value,
@@ -86,23 +72,13 @@ def _emit_job_status(job: "Job") -> None:
             "duration_s": job.duration_s,
         })
 
-
-class JobRunner:
-    """Manages background SDR jobs."""
-
-    def __init__(self):
-        self.jobs: dict[str, Job] = {}
-        self._pool = ThreadPoolExecutor(max_workers=1)
-        self.live = LiveSession(emit=_emit, emit_audio=_emit_audio)
-        self._current_sdr = None
-
     def _submit_job(self, job_type: str, params: dict, run_fn: Callable) -> Job:
         if self.live.active:
             self.live.stop()
         job_id = uuid.uuid4().hex[:12]
         job = Job(id=job_id, type=job_type, status=JobStatus.PENDING, params=params)
         self.jobs[job_id] = job
-        _emit_job_status(job)
+        self._emit_job_status(job)
         self._pool.submit(run_fn, job)
         return job
 
@@ -124,7 +100,7 @@ class JobRunner:
         centers = plan_chunks(p["start_mhz"] * 1e6, p["stop_mhz"] * 1e6)
         num_chunks = len(centers)
 
-        _emit(job.id, f"{label}: {p['start_mhz']:.1f} – {p['stop_mhz']:.1f} MHz "
+        self._emit(job.id, f"{label}: {p['start_mhz']:.1f} – {p['stop_mhz']:.1f} MHz "
               f"({num_chunks} chunk{'s' if num_chunks > 1 else ''})")
 
         segments = []
@@ -134,7 +110,7 @@ class JobRunner:
                 for i, fc in enumerate(centers):
                     if job.cancel.is_set():
                         raise CancelledError()
-                    _emit(job.id, f"  [{i+1}/{num_chunks}] Capturing {fc/1e6:.1f} MHz...")
+                    self._emit(job.id, f"  [{i+1}/{num_chunks}] Capturing {fc/1e6:.1f} MHz...")
                     config = CaptureConfig(
                         center_freq=fc, sample_rate=SAMPLE_RATE,
                         duration=p["duration"], gain=p["gain"],
@@ -161,15 +137,14 @@ class JobRunner:
     def _finalize_job(self, job: Job, t0: float) -> None:
         job.status = JobStatus.COMPLETE
         job.duration_s = round(time.time() - t0, 2)
-        _emit_job_status(job)
-        from core.api.db import save_scan
+        self._emit_job_status(job)
         save_scan(job)
 
     # ── Scan (stitched) ─────────────────────────────────
 
     def _run_scan(self, job: Job) -> None:
         job.status = JobStatus.RUNNING
-        _emit_job_status(job)
+        self._emit_job_status(job)
         t0 = time.time()
 
         try:
@@ -177,9 +152,9 @@ class JobRunner:
 
             segments, num_chunks = self._capture_segments(job, "Scan", compute_waterfall, trim_waterfall)
             if num_chunks > 1:
-                _emit(job.id, "  Note: chunks captured sequentially, not simultaneously")
+                self._emit(job.id, "  Note: chunks captured sequentially, not simultaneously")
 
-            _emit(job.id, "Stitching spectrum..." if num_chunks > 1 else "Processing...")
+            self._emit(job.id, "Stitching spectrum..." if num_chunks > 1 else "Processing...")
             result = stitch_waterfalls(segments)
 
             # 1D spectrum: send at full res (uPlot handles 25k+ points fine)
@@ -203,18 +178,18 @@ class JobRunner:
             }
 
             self._finalize_job(job, t0)
-            _emit(job.id, f"Scan complete ({job.duration_s}s)")
+            self._emit(job.id, f"Scan complete ({job.duration_s}s)")
 
         except (CancelledError, Exception) as e:
             job.duration_s = round(time.time() - t0, 2)
             if isinstance(e, CancelledError) or job.cancel.is_set():
                 job.status = JobStatus.CANCELLED
-                _emit(job.id, "Scan cancelled")
+                self._emit(job.id, "Scan cancelled")
             else:
                 job.status = JobStatus.ERROR
                 job.error = str(e)
-                _emit(job.id, f"ERROR: {e}")
+                self._emit(job.id, f"ERROR: {e}")
                 logger.error(traceback.format_exc())
-            _emit_job_status(job)
+            self._emit_job_status(job)
         finally:
             import gc; gc.collect()

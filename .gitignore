@@ -20,6 +20,7 @@ venv/
 .idea/
 *.swp
 *.swo
+.claude/
 
 # OS
 Thumbs.db
@@ -34,6 +35,9 @@ data/*.db-shm
 data/*.db-wal
 data/recordings/
 data/models/
+data/*.npz
+data/cache/
+data/debug/*
 !data/.gitkeep
 
 # Matplotlib output
@@ -43,14 +47,12 @@ data/models/
 # Jupyter
 .ipynb_checkpoints/
 rf-sentinel-project-plan.md
-antena.txt
-questions.txt
-bugs.txt
-.claude/settings.local.json
-freq.txt
+
 core/ml/Sub-GHz IQ dataset
 core/ml/RadioML 201801a/
 core/ml/*.zip
-data/*.npz
-data/cache/
-data/debug/*
+
+*.txt
+*.md
+!requirements.txt
+!README.md
