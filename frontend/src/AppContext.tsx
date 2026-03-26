@@ -61,17 +61,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
     const center = (freqs[0] + freqs[freqs.length - 1]) / 2;
     const prev = vfoRef.current;
+    if (prev != null && prev >= freqs[0] && prev <= freqs[freqs.length - 1]) return;
     if (prev != null) {
-      if (prev < freqs[0] || prev > freqs[freqs.length - 1]) {
-        setAudioEnabled(false);
-        audioRef.current.stop();
-        setVfoFreq(center);
-        setVfo(center).catch(() => setVfoFreq(null));
-      }
-    } else {
-      setVfoFreq(center);
-      setVfo(center).catch(() => setVfoFreq(null));
+      setAudioEnabled(false);
+      audioRef.current.stop();
     }
+    setVfoFreq(center);
+    setVfo(center).catch(() => setVfoFreq(null));
   }, []);
 
   const { connected, logs, clearLogs, jobs, setJobs } = useWebSocket(WS_URL, handleSpectrum);
