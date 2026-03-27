@@ -1,0 +1,276 @@
+"""Live mode — continuous SDR streaming with spectrum + audio."""
+
+from __future__ import annotations
+
+import json
+import logging
+import queue
+import threading
+import traceback
+from typing import Callable, Optional
+
+import numpy as np
+
+from core.dsp.types import DemodMode
+
+logger = logging.getLogger("rfsentinel.runner")
+
+
+class _PsdSmoother:
+    """Exponential moving average over consecutive PSD frames (live mode)."""
+
+    def __init__(self, alpha: float = 0.3) -> None:
+        self._alpha = alpha
+        self._prev: np.ndarray | None = None
+
+    def update(self, power_db: np.ndarray) -> np.ndarray:
+        if self._prev is None or len(self._prev) != len(power_db):
+            self._prev = power_db.copy()
+            return power_db
+        self._prev[:] = self._alpha * power_db + (1 - self._alpha) * self._prev
+        return self._prev.copy()
+
+LIVE_PSD_NFFT = 2048
+LIVE_FRAME_DURATION_S = 0.1
+SPECTRUM_SEND_INTERVAL = 5
+DOWNSAMPLE_POINTS = 1024
+
+
+class LiveSession:
+    """Owns all live-mode state and streaming logic."""
+
+    def __init__(self, emit: Callable[[str, str], None],
+                 emit_audio: Callable[[bytes], None]) -> None:
+        self._emit = emit
+        self._emit_audio = emit_audio
+        self._active = False
+        self._thread: threading.Thread | None = None
+        self._sdr = None
+        self._config = None
+        self._audio_enabled = False
+        self._demod_mode = DemodMode.FM
+        self._demod_state = None
+        self._vfo_freq_hz: Optional[float] = None
+        self._bias_tee: bool = False
+        self._psd_smoother = None
+        self._spectrum_queue: queue.Queue | None = None
+        self._spectrum_thread: threading.Thread | None = None
+
+    def _reset_dsp_state(self) -> None:
+        self._demod_state = None
+        self._psd_smoother = None
+
+    @staticmethod
+    def _compute_params(start_mhz: float, stop_mhz: float) -> tuple[float, float, float, float]:
+        from core.dsp import SAMPLE_RATE
+        max_bw = SAMPLE_RATE / 1e6
+        if stop_mhz - start_mhz > max_bw:
+            stop_mhz = start_mhz + max_bw
+        center_hz = (start_mhz + stop_mhz) / 2 * 1e6
+        bw_hz = (stop_mhz - start_mhz) * 1e6
+        sample_rate = min(max(bw_hz, 0.25e6), SAMPLE_RATE)
+        return center_hz, sample_rate, start_mhz, stop_mhz
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    @property
+    def audio_enabled(self) -> bool:
+        return self._audio_enabled
+
+    @property
+    def vfo_freq_hz(self) -> Optional[float]:
+        return self._vfo_freq_hz
+
+    def start(self, start_mhz: float, stop_mhz: float, gain: float,
+              audio_enabled: bool = False, demod_mode: DemodMode = DemodMode.FM,
+              bias_tee: bool = False) -> None:
+        if self._active:
+            self.stop()
+        center_hz, sample_rate, start_mhz, stop_mhz = self._compute_params(start_mhz, stop_mhz)
+        self._audio_enabled = audio_enabled
+        self._demod_mode = demod_mode
+        self._vfo_freq_hz = None
+        self._bias_tee = bias_tee
+        self._reset_dsp_state()
+        self._active = True
+        self._thread = threading.Thread(
+            target=self._loop,
+            args=(center_hz, sample_rate, gain, start_mhz, stop_mhz),
+            daemon=True,
+        )
+        self._thread.start()
+        audio_tag = f" [audio: {demod_mode.upper()}]" if audio_enabled else ""
+        bias_tag = " [bias-T ON]" if bias_tee else ""
+        self._emit("live", f"Live started: {start_mhz:.1f}\u2013{stop_mhz:.1f} MHz{audio_tag}{bias_tag}")
+
+    def stop(self) -> None:
+        self._active = False
+        self._audio_enabled = False
+        if self._sdr:
+            self._sdr.stop_stream()
+        if self._thread:
+            self._thread.join(timeout=3)
+            self._thread = None
+        self._sdr = None
+        self._config = None
+        self._emit("live", "Live stopped")
+
+    def retune(self, start_mhz: float, stop_mhz: float, gain: float) -> None:
+        if not self._active or not self._sdr:
+            return
+        from core.sdr import CaptureConfig
+        center_hz, sample_rate, start_mhz, stop_mhz = self._compute_params(start_mhz, stop_mhz)
+        if self._config and sample_rate != self._config.sample_rate:
+            audio = self._audio_enabled
+            demod = self._demod_mode
+            self.stop()
+            self.start(start_mhz, stop_mhz, gain, audio, demod, self._bias_tee)
+            return
+        try:
+            self._sdr.retune(center_hz, gain)
+        except Exception as e:
+            logger.error("retune failed: %s", e)
+            self._emit("live", f"Retune error: {e}")
+            return
+        self._config = CaptureConfig(
+            center_freq=center_hz, sample_rate=sample_rate,
+            gain=gain, duration=0,
+        )
+        self._reset_dsp_state()
+
+    def toggle_audio(self, enabled: bool, demod_mode: DemodMode = DemodMode.FM) -> None:
+        self._audio_enabled = enabled
+        self._demod_mode = demod_mode
+        self._reset_dsp_state()
+        state = f"ON ({demod_mode.upper()})" if enabled else "OFF"
+        self._emit("live", f"Audio {state}")
+
+    def set_vfo(self, freq_mhz: float) -> None:
+        self._vfo_freq_hz = freq_mhz * 1e6
+        self._reset_dsp_state()
+        self._emit("live", f"VFO → {freq_mhz:.3f} MHz")
+
+    # ── Internal ──────────────────────────────────────────
+
+    def _spectrum_worker(self) -> None:
+        while self._active:
+            try:
+                capture = self._spectrum_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if capture is None:
+                break
+            try:
+                self._send_spectrum(capture)
+            except Exception as e:
+                logger.warning("spectrum worker error: %s", e)
+
+    def _process_frame(self, capture, sample_rate: float,
+                       frame_count: int, send_spectrum: bool) -> None:
+        from core.dsp import demodulate
+        from core.dsp.demod import vfo_shift
+
+        vfo_iq = None
+        if self._vfo_freq_hz is not None and self._config:
+            offset_hz = self._vfo_freq_hz - self._config.center_freq
+            state = self._demod_state
+            if state is None:
+                from core.dsp.demod import DemodState
+                state = DemodState()
+                self._demod_state = state
+            vfo_iq, state.vfo_phase = vfo_shift(
+                capture.samples, offset_hz, sample_rate, state.vfo_phase,
+            )
+
+        if self._audio_enabled:
+            try:
+                iq = vfo_iq if vfo_iq is not None else capture.samples
+                mode = DemodMode(self._demod_mode)
+                pcm, new_state = demodulate(
+                    iq, sample_rate, mode, self._demod_state,
+                )
+                self._demod_state = new_state
+                self._emit_audio(pcm.tobytes())
+            except Exception as e:
+                logger.warning("audio demod error frame %d: %s", frame_count, e)
+
+        if send_spectrum and self._spectrum_queue is not None:
+            try:
+                self._spectrum_queue.put_nowait(capture)
+            except queue.Full:
+                pass
+
+    def _send_spectrum(self, capture) -> None:
+        from core.dsp import compute_psd
+
+        result = compute_psd(capture, nfft=LIVE_PSD_NFFT)
+
+        if self._psd_smoother is None:
+            self._psd_smoother = _PsdSmoother()
+        smoothed = self._psd_smoother.update(result.power_db)
+
+        step = max(1, len(result.freqs_mhz) // DOWNSAMPLE_POINTS)
+        freqs = result.freqs_mhz[::step]
+        power = smoothed[::step]
+
+        payload = json.dumps({
+            "type": "spectrum",
+            "freqs_mhz": freqs.tolist(),
+            "power_db": power.tolist(),
+        })
+        self._emit("__spectrum__", payload)
+
+    def _loop(self, center_hz: float, sample_rate: float,
+              gain: float, start_mhz: float, stop_mhz: float) -> None:
+        from core.sdr import SDRDevice, CaptureConfig, CaptureResult
+
+        frame_count = 0
+        try:
+            with SDRDevice() as sdr:
+                self._sdr = sdr
+                self._config = CaptureConfig(
+                    center_freq=center_hz, sample_rate=sample_rate,
+                    gain=gain, duration=0, bias_tee=self._bias_tee,
+                )
+                sdr.configure(self._config)
+                chunk_samples = int(sample_rate * LIVE_FRAME_DURATION_S)
+
+                self._spectrum_queue = queue.Queue(maxsize=1)
+                self._spectrum_thread = threading.Thread(
+                    target=self._spectrum_worker, daemon=True,
+                )
+                self._spectrum_thread.start()
+
+                def on_chunk(iq):
+                    nonlocal frame_count
+                    if not self._active:
+                        sdr.stop_stream()
+                        return
+                    cfg = self._config
+                    capture = CaptureResult(
+                        samples=iq, config=cfg,
+                        actual_duration=len(iq) / cfg.sample_rate,
+                        num_samples=len(iq),
+                    )
+                    send_spectrum = (frame_count % SPECTRUM_SEND_INTERVAL == 0)
+                    self._process_frame(capture, cfg.sample_rate, frame_count, send_spectrum)
+                    frame_count += 1
+
+                sdr.start_stream(on_chunk, chunk_samples)
+        except Exception as e:
+            if self._active:
+                self._emit("live", f"Live error: {e}")
+                logger.error(traceback.format_exc())
+        finally:
+            self._active = False
+            self._audio_enabled = False
+            if self._spectrum_queue:
+                self._spectrum_queue.put(None)
+            if self._spectrum_thread:
+                self._spectrum_thread.join(timeout=2)
+                self._spectrum_thread = None
+            self._spectrum_queue = None
+            self._sdr = None
+            self._config = None

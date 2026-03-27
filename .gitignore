@@ -1,0 +1,58 @@
+# Node
+node_modules/
+frontend/dist/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual env
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.claude/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Data files (keep structure, ignore large captures)
+data/*.raw
+data/*.iq
+data/*.npy
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/recordings/
+data/models/
+data/*.npz
+data/cache/
+data/debug/*
+!data/.gitkeep
+
+# Matplotlib output
+*.png
+!showcase*.png
+
+# Jupyter
+.ipynb_checkpoints/
+rf-sentinel-project-plan.md
+
+core/ml/Sub-GHz IQ dataset
+core/ml/RadioML 201801a/
+core/ml/*.zip
+
+*.txt
+*.md
+!requirements.txt
+!README.md
