@@ -27,6 +27,7 @@ interface AppContextValue {
   handleCancelJob: (jobId: string) => void;
   handleDeleteScan: (scanId: string) => void;
   handleScanPeakClick: (freq_mhz: number) => void;
+  updateJobInState: (job: JobInfo) => void;
   clearLogs: () => void;
   setVolume: (v: number) => void;
   controlPanelRef: React.RefObject<ControlPanelHandle>;
@@ -90,12 +91,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!liveActive) return;
     setVfoFreq(freq_mhz);
     setVfo(freq_mhz).catch(() => setVfoFreq(null));
-    if (!audioEnabled) {
-      toggleAudio({ enabled: true, demod_mode: 'fm' }).catch(() => {});
-      setAudioEnabled(true);
-      audio.start();
-    }
-  }, [liveActive, audioEnabled, audio]);
+    controlPanelRef.current?.tuneToFreq(freq_mhz);
+  }, [liveActive]);
 
   const handleLiveToggle = useCallback((active: boolean) => {
     setLiveActive(active);
@@ -127,6 +124,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     controlPanelRef.current?.goLiveAt(freq_mhz);
   }, []);
 
+  const updateJobInState = useCallback((job: JobInfo) => {
+    setJobs(prev => {
+      const filtered = prev.filter(j => j.id !== job.id);
+      return [job, ...filtered];
+    });
+    setSelectedJob(prev => prev?.id === job.id ? job : prev);
+  }, [setJobs]);
+
   return (
     <AppContext.Provider value={{
       liveActive, liveFrame, audioEnabled, vfoFreq,
@@ -134,7 +139,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       connected, logs,
       handleLiveToggle, handleAudioToggle, handleFreqClick,
       handleSelectJob, handleCancelJob, handleDeleteScan,
-      handleScanPeakClick, clearLogs,
+      handleScanPeakClick, updateJobInState, clearLogs,
       setVolume: audio.setVolume,
       controlPanelRef,
     }}>

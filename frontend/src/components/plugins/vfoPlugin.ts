@@ -7,6 +7,8 @@ const DRAG_THRESHOLD = 4;
 export default function vfoPlugin(
   vfoRef: React.MutableRefObject<number | null>,
   cbRef: React.MutableRefObject<((freq_mhz: number) => void) | undefined>,
+  dblCbRef: React.MutableRefObject<((freq_mhz: number) => void) | undefined>,
+  snapFreqRef: React.MutableRefObject<((freq_mhz: number) => number) | undefined>,
   xStartRef: React.MutableRefObject<number>,
   xEndRef: React.MutableRefObject<number>,
   dataXMinRef: React.MutableRefObject<number>,
@@ -131,7 +133,19 @@ export default function vfoPlugin(
           const rect = over.getBoundingClientRect();
           const cx = e.clientX - rect.left;
           if (nearVfo(cx)) return;
-          cbRef.current(u.posToVal(cx, 'x'));
+          const raw = u.posToVal(cx, 'x');
+          const snapped = snapFreqRef.current ? snapFreqRef.current(raw) : raw;
+          cbRef.current(snapped);
+        });
+
+        over.addEventListener('dblclick', (e: MouseEvent) => {
+          if (!dblCbRef.current) return;
+          const rect = over.getBoundingClientRect();
+          const cx = e.clientX - rect.left;
+          if (nearVfo(cx)) return;
+          const raw = u.posToVal(cx, 'x');
+          const snapped = snapFreqRef.current ? snapFreqRef.current(raw) : raw;
+          dblCbRef.current(snapped);
         });
       },
     },

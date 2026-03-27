@@ -5,9 +5,15 @@ from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from core.api.models import ScanRequest, LiveRequest, RetuneRequest, AudioToggleRequest, VfoRequest
+from core.api.models import (
+    ScanRequest, LiveRequest, RetuneRequest, AudioToggleRequest, VfoRequest,
+    ScanNoteUpdateRequest, SavedFrequencyCreateRequest,
+)
 from core.api.runner import JobRunner
-from core.api.db import list_scans, get_scan, delete_scan as db_delete, get_settings, save_settings
+from core.api.db import (
+    list_scans, get_scan, delete_scan as db_delete, get_settings, save_settings,
+    update_scan_note, list_saved_frequencies, save_frequency, delete_saved_frequency,
+)
 
 
 def create_routes(runner: JobRunner) -> APIRouter:
@@ -19,7 +25,10 @@ def create_routes(runner: JobRunner) -> APIRouter:
 
     @router.post("/api/scan")
     async def start_scan(req: ScanRequest):
-        job = runner.submit_scan(req.start_mhz, req.stop_mhz, req.duration, req.gain, req.bias_tee)
+        job = runner.submit_scan(
+            req.start_mhz, req.stop_mhz, req.duration, req.gain,
+            req.bias_tee, req.preset_band,
+        )
         return {"job_id": job.id, "status": job.status.value}
 
     @router.post("/api/live/start")
@@ -80,6 +89,30 @@ def create_routes(runner: JobRunner) -> APIRouter:
         if db_delete(scan_id):
             return {"status": "deleted"}
         return JSONResponse({"error": "Scan not found"}, status_code=404)
+
+    @router.post("/api/scans/{scan_id}/note")
+    async def update_scan_note_route(scan_id: str, req: ScanNoteUpdateRequest):
+        result = update_scan_note(scan_id, req.note)
+        if not result:
+            return JSONResponse({"error": "Scan not found"}, status_code=404)
+        return result
+
+    @router.get("/api/frequencies")
+    async def get_saved_frequencies(limit: int = 200):
+        return {"items": list_saved_frequencies(limit)}
+
+    @router.post("/api/frequencies")
+    async def create_saved_frequency(req: SavedFrequencyCreateRequest):
+        item = save_frequency(req.freq_mhz, req.description, req.scan_id, req.preset_band)
+        if not item:
+            return JSONResponse({"error": "Unable to save frequency"}, status_code=500)
+        return item
+
+    @router.delete("/api/frequencies/{freq_id}")
+    async def remove_saved_frequency(freq_id: int):
+        if delete_saved_frequency(freq_id):
+            return {"status": "deleted"}
+        return JSONResponse({"error": "Saved frequency not found"}, status_code=404)
 
     # ── Settings ─────────────────────────────────────────────────────────
 

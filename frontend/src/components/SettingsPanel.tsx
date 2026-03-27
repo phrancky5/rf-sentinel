@@ -2,7 +2,7 @@
  * SettingsPanel — slide-in drawer for editing UI/chart settings.
  */
 import { useState } from 'react';
-import { useSettings, DEFAULT_SETTINGS, type AppSettings } from '../SettingsContext';
+import { useSettings, type AppSettings } from '../SettingsContext';
 
 // ── Small reusable controls ────────────────────────────────────────────────
 
@@ -170,6 +170,27 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                     value={settings.uiFontSize}
                     min={10} max={22} step={1}
                     onChange={v => update({ uiFontSize: v })}
+                  />
+                </Row>
+                <Row label="Marker text size (px)">
+                  <NumInput
+                    value={settings.markerFontSize}
+                    min={8} max={20} step={1}
+                    onChange={v => update({ markerFontSize: v })}
+                  />
+                </Row>
+                <Row label="Axis tick text size (px)">
+                  <NumInput
+                    value={settings.axisTickFontSize}
+                    min={8} max={20} step={1}
+                    onChange={v => update({ axisTickFontSize: v })}
+                  />
+                </Row>
+                <Row label="Axis label text size (px)">
+                  <NumInput
+                    value={settings.axisLabelFontSize}
+                    min={8} max={24} step={1}
+                    onChange={v => update({ axisLabelFontSize: v })}
                   />
                 </Row>
               </div>

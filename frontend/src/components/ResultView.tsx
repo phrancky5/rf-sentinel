@@ -1,5 +1,7 @@
-import { useCallback, useRef, useState } from 'react';
-import { JobInfo } from '../api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  JobInfo, SavedFrequency, deleteFrequency, listSavedFrequencies, saveFrequency, saveScanNote,
+} from '../api';
 import { useApp } from '../AppContext';
 import SpectrumChart, { ChartView } from './SpectrumChart';
 import DualRangeSlider from './DualRangeSlider';
@@ -62,7 +64,150 @@ function JobHeader({ job }: { job: JobInfo }) {
   );
 }
 
-function ScanResult({ job, onFreqClick }: { job: JobInfo; onFreqClick?: (freq_mhz: number) => void }) {
+function ScanMetaPanel({ job, prefillFreqMhz }: { job: JobInfo; prefillFreqMhz: number | null }) {
+  const { updateJobInState } = useApp();
+  const [note, setNote] = useState(job.params.note ?? '');
+  const [savingNote, setSavingNote] = useState(false);
+  const [freqMhz, setFreqMhz] = useState('');
+  const [description, setDescription] = useState('');
+  const [savingFreq, setSavingFreq] = useState(false);
+  const [items, setItems] = useState<SavedFrequency[]>([]);
+
+  useEffect(() => {
+    setNote(job.params.note ?? '');
+    setFreqMhz('');
+    setDescription('');
+  }, [job.id, job.params.note]);
+
+  useEffect(() => {
+    if (prefillFreqMhz == null) return;
+    setFreqMhz(prefillFreqMhz.toFixed(4));
+  }, [prefillFreqMhz]);
+
+  useEffect(() => {
+    listSavedFrequencies().then(res => {
+      setItems(res.items.filter(item => item.scan_id === job.id));
+    }).catch(() => {});
+  }, [job.id]);
+
+  const onSaveNote = async () => {
+    setSavingNote(true);
+    try {
+      const updated = await saveScanNote(job.id, note);
+      updateJobInState(updated);
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
+  const onSaveFrequency = async () => {
+    const freq = Number(freqMhz);
+    if (!Number.isFinite(freq) || !description.trim()) return;
+    setSavingFreq(true);
+    try {
+      const saved = await saveFrequency({
+        freq_mhz: freq,
+        description: description.trim(),
+        scan_id: job.id,
+        preset_band: job.params.preset_band ?? null,
+      });
+      setItems(prev => [saved, ...prev]);
+      setDescription('');
+    } finally {
+      setSavingFreq(false);
+    }
+  };
+
+  const onDeleteFrequency = async (freqId: number) => {
+    await deleteFrequency(freqId);
+    setItems(prev => prev.filter(item => item.id !== freqId));
+  };
+
+  return (
+    <div className="border-b border-gray-700/50 px-3 py-3 space-y-3 bg-gray-900/20">
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs text-gray-500 uppercase tracking-wider">Preset Band</span>
+        <span className="text-xs px-2 py-1 rounded border border-cyan-500/20 bg-cyan-500/10 text-cyan-300">
+          {job.params.preset_band || 'Manual'}
+        </span>
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-xs text-gray-500 uppercase tracking-wider">Scan Note</label>
+          <button
+            onClick={onSaveNote}
+            disabled={savingNote}
+            className="px-2 py-1 rounded text-xs bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/30 disabled:opacity-50"
+          >
+            {savingNote ? 'Saving...' : 'Save Note'}
+          </button>
+        </div>
+        <textarea
+          value={note}
+          onChange={e => setNote(e.target.value)}
+          rows={3}
+          placeholder="Add your notes for this scan"
+          className="w-full px-2 py-2 text-sm rounded border border-gray-700 bg-gray-950/70 text-gray-200 focus:outline-none focus:border-cyan-600 resize-y"
+        />
+      </div>
+
+      <div>
+        <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Save Frequency</div>
+        <div className="text-[11px] text-gray-500 mb-1.5">Click spectrum to prefill. Double-click to jump live.</div>
+        <div className="flex flex-wrap gap-2">
+          <input
+            value={freqMhz}
+            onChange={e => setFreqMhz(e.target.value)}
+            placeholder="Frequency MHz"
+            className="w-36 px-2 py-1.5 text-sm font-mono rounded border border-gray-700 bg-gray-950/70 text-gray-200 focus:outline-none focus:border-cyan-600"
+          />
+          <input
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            placeholder="Description"
+            className="flex-1 min-w-[16rem] px-2 py-1.5 text-sm rounded border border-gray-700 bg-gray-950/70 text-gray-200 focus:outline-none focus:border-cyan-600"
+          />
+          <button
+            onClick={onSaveFrequency}
+            disabled={savingFreq}
+            className="px-3 py-1.5 rounded text-sm bg-green-600/20 text-green-300 hover:bg-green-600/30 disabled:opacity-50"
+          >
+            {savingFreq ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+        {items.length > 0 && (
+          <div className="mt-2 space-y-1.5 max-h-40 overflow-y-auto">
+            {items.map(item => (
+              <div key={item.id} className="flex items-center justify-between gap-3 rounded border border-gray-800 bg-gray-950/40 px-2 py-1.5">
+                <div className="min-w-0">
+                  <div className="text-sm font-mono text-cyan-300">{item.freq_mhz.toFixed(4)} MHz</div>
+                  <div className="text-xs text-gray-400 truncate">{item.description}</div>
+                </div>
+                <button
+                  onClick={() => onDeleteFrequency(item.id)}
+                  className="text-xs text-red-400 hover:text-red-300"
+                >
+                  Delete
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ScanResult({
+  job,
+  onFreqClick,
+  onFreqDoubleClick,
+}: {
+  job: JobInfo;
+  onFreqClick?: (freq_mhz: number) => void;
+  onFreqDoubleClick?: (freq_mhz: number) => void;
+}) {
   const [chartView, setChartView] = useState<ChartView | null>(null);
   const [dataDbRange, setDataDbRange] = useState<[number, number]>([-120, -20]);
   const [dbRange, setDbRange] = useState<[number, number] | null>(null);
@@ -92,7 +237,13 @@ function ScanResult({ job, onFreqClick }: { job: JobInfo; onFreqClick?: (freq_mh
     <div className="flex flex-col h-full">
       {frame && (
         <div className="flex-[2] min-h-0">
-          <SpectrumChart frame={frame} mode="scan" onFreqClick={onFreqClick} onViewChange={setChartView} />
+          <SpectrumChart
+            frame={frame}
+            mode="scan"
+            onFreqClick={onFreqClick}
+            onFreqDoubleClick={onFreqDoubleClick}
+            onViewChange={setChartView}
+          />
         </div>
       )}
       <div className="flex-1 min-h-0 flex">
@@ -115,6 +266,7 @@ function ScanResult({ job, onFreqClick }: { job: JobInfo; onFreqClick?: (freq_mh
 
 export default function ResultView() {
   const { selectedJob: job, handleScanPeakClick } = useApp();
+  const [prefillFreqMhz, setPrefillFreqMhz] = useState<number | null>(null);
 
   if (!job) return <EmptyState />;
   if (job.status === 'pending' || job.status === 'running') return <LoadingState job={job} />;
@@ -123,8 +275,9 @@ export default function ResultView() {
   return (
     <div className="flex flex-col h-full">
       <JobHeader job={job} />
+      <ScanMetaPanel job={job} prefillFreqMhz={prefillFreqMhz} />
       <div className="flex-1 min-h-0">
-        <ScanResult job={job} onFreqClick={handleScanPeakClick} />
+        <ScanResult job={job} onFreqClick={setPrefillFreqMhz} onFreqDoubleClick={handleScanPeakClick} />
       </div>
     </div>
   );

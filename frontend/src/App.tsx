@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { AppProvider, useApp } from './AppContext';
+import { APP_VERSION } from './config';
 import ControlPanel from './components/ControlPanel';
 import LogConsole from './components/LogConsole';
 import JobList from './components/JobList';
@@ -16,7 +17,7 @@ function Header({ onSettingsOpen }: { onSettingsOpen: () => void }) {
         <h1 className="text-base font-bold tracking-tight">
           <span className="text-cyan-400">RF</span>Sentinel
         </h1>
-        <span className="text-xs text-gray-600 font-mono">v0.1.0</span>
+        <span className="text-xs text-gray-600 font-mono">v{APP_VERSION}</span>
       </div>
       <div className="flex items-center gap-3">
         {liveActive && (
@@ -48,14 +49,21 @@ function Header({ onSettingsOpen }: { onSettingsOpen: () => void }) {
 }
 
 function Sidebar() {
+  const [jobsOpen, setJobsOpen] = useState(true);
   return (
     <aside className="w-72 border-r border-gray-800 flex flex-col">
       <div className="p-3 border-b border-gray-800/50 flex-shrink-0">
         <ControlPanel />
       </div>
       <div className="flex-1 overflow-y-auto p-3">
-        <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-2">Jobs</h3>
-        <JobList />
+        <button
+          onClick={() => setJobsOpen(o => !o)}
+          className="flex items-center justify-between w-full text-xs text-gray-500 uppercase tracking-wider mb-2 hover:text-gray-200 transition-colors"
+        >
+          <span>Jobs</span>
+          <span className="text-sm text-cyan-400">{jobsOpen ? '▲' : '▼'}</span>
+        </button>
+        {jobsOpen && <JobList />}
       </div>
     </aside>
   );

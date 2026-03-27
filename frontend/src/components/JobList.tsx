@@ -54,6 +54,11 @@ function JobCard({ job, selected, onSelect, onCancel, onDelete }: {
         <div className="flex items-center gap-2">
           <span className="text-sm">{TYPE_ICON[job.type] || '📦'}</span>
           <span className="text-sm text-gray-200 capitalize">{job.type}</span>
+          {job.params.preset_band && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+              {job.params.preset_band}
+            </span>
+          )}
           {job.params.start_mhz && job.params.stop_mhz && (
             <span className="text-xs text-gray-500 font-mono">
               {job.params.start_mhz}–{job.params.stop_mhz} MHz

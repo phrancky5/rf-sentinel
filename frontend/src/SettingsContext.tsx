@@ -24,8 +24,11 @@ export interface AppSettings {
   markerColor:     string;
   markerMinProminenceDb: number;
   markerMinSpacingMhz:   number;
+  markerFontSize:  number;
   // Typography
   uiFontSize:      number;   // px, applied to <html>
+  axisTickFontSize: number;
+  axisLabelFontSize: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -40,7 +43,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   markerColor:     'rgba(251,191,36,0.88)',
   markerMinProminenceDb: 3,
   markerMinSpacingMhz:   0.3,
+  markerFontSize:  9,
   uiFontSize:      14,
+  axisTickFontSize: 10,
+  axisLabelFontSize: 11,
 };
 
 // ── Context ────────────────────────────────────────────────────────────────

@@ -83,10 +83,12 @@ class JobRunner:
         return job
 
     def submit_scan(self, start_mhz: float, stop_mhz: float,
-                    duration: float, gain: float, bias_tee: bool = False) -> Job:
+                    duration: float, gain: float, bias_tee: bool = False,
+                    preset_band: str | None = None) -> Job:
         return self._submit_job("scan", {
             "start_mhz": start_mhz, "stop_mhz": stop_mhz,
             "duration": duration, "gain": gain, "bias_tee": bias_tee,
+            "preset_band": preset_band, "note": "",
         }, self._run_scan)
 
     # ── Shared helpers ──────────────────────────────────

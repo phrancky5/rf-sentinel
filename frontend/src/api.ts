@@ -30,8 +30,17 @@ export interface JobInfo {
   duration_s: number | null;
 }
 
+export interface SavedFrequency {
+  id: number;
+  freq_mhz: number;
+  description: string;
+  scan_id: string | null;
+  preset_band: string | null;
+  created_at: string;
+}
+
 export async function startScan(params: {
-  start_mhz: number; stop_mhz: number; duration: number; gain: number; bias_tee?: boolean;
+  start_mhz: number; stop_mhz: number; duration: number; gain: number; bias_tee?: boolean; preset_band?: string | null;
 }): Promise<JobResponse> {
   return (await post('/api/scan', params)).json();
 }
@@ -97,6 +106,28 @@ export async function cancelJob(jobId: string): Promise<{ status: string }> {
 
 export async function deleteScan(scanId: string): Promise<{ status: string }> {
   const res = await fetch(`${API}/api/scans/${scanId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function saveScanNote(scanId: string, note: string): Promise<JobInfo> {
+  return (await post(`/api/scans/${scanId}/note`, { note })).json();
+}
+
+export async function listSavedFrequencies(limit = 200): Promise<{ items: SavedFrequency[] }> {
+  const res = await fetch(`${API}/api/frequencies?limit=${limit}`);
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function saveFrequency(params: {
+  freq_mhz: number; description: string; scan_id?: string | null; preset_band?: string | null;
+}): Promise<SavedFrequency> {
+  return (await post('/api/frequencies', params)).json();
+}
+
+export async function deleteFrequency(freqId: number): Promise<{ status: string }> {
+  const res = await fetch(`${API}/api/frequencies/${freqId}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
 }

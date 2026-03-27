@@ -25,6 +25,7 @@ class ScanRequest(BaseModel):
     duration: float = Field(5.0, ge=0.5, le=30.0)
     gain: float = Field(30.0, ge=0.0, le=50.0)
     bias_tee: bool = Field(False, description="Enable bias-T 4.5V supply for active antenna LNA")
+    preset_band: Optional[str] = Field(None, max_length=80, description="Matched preset label for this scan")
 
 
 class LiveRequest(BaseModel):
@@ -64,3 +65,16 @@ class JobInfo(BaseModel):
     error: Optional[str] = None
     created_at: str
     duration_s: Optional[float] = None
+
+
+class ScanNoteUpdateRequest(BaseModel):
+    """Editable note attached to a completed scan."""
+    note: str = Field("", max_length=2000)
+
+
+class SavedFrequencyCreateRequest(BaseModel):
+    """Create a saved frequency bookmark."""
+    freq_mhz: float = Field(..., ge=24.0, le=1766.0)
+    description: str = Field(..., min_length=1, max_length=240)
+    scan_id: Optional[str] = Field(None, max_length=64)
+    preset_band: Optional[str] = Field(None, max_length=80)

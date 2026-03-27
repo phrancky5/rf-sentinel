@@ -81,7 +81,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         for scan in reversed(history):
             await ws.send_text(json.dumps({"type": "job_update", "job": {
                 "id": scan["id"], "type": "scan", "status": "complete",
-                "params": {k: scan[k] for k in ("start_mhz", "stop_mhz", "duration", "gain")},
+                "params": {k: scan[k] for k in ("start_mhz", "stop_mhz", "duration", "gain", "preset_band", "note")},
                 "error": None, "created_at": scan["created_at"],
                 "duration_s": scan["duration_s"],
             }}))

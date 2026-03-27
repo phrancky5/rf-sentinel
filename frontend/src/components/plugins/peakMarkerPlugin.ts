@@ -15,6 +15,8 @@ export interface PeakMarkerOpts {
   minSpacingMhz?: number;
   /** Maximum number of markers rendered (default 50) */
   maxMarkers?: number;
+  /** Marker label font size in CSS pixels */
+  fontSizePx?: number;
 }
 
 interface Marker {
@@ -139,7 +141,7 @@ export default function peakMarkerPlugin(
 
           // ── Rotated frequency label near the top of the line ─────────────
           const label = m.freq.toFixed(3);
-          const fontSize = Math.round(9 * dpr);
+          const fontSize = Math.round((optsRef.current.fontSizePx ?? 9) * dpr);
           ctx.font = `${fontSize}px monospace`;
           ctx.fillStyle = colorRef.current;
           ctx.save();

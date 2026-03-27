@@ -1,14 +1,15 @@
 import { useState, useCallback, useEffect, useRef, useImperativeHandle } from 'react';
-import { startScan, startLive, retuneLive, stopLive, toggleAudio } from '../api';
+import { startScan, startLive, retuneLive, stopLive, listSavedFrequencies, type SavedFrequency } from '../api';
 import { useApp } from '../AppContext';
 import ModeSelector, { Mode } from './ModeSelector';
-import PresetBar from './PresetBar';
+import PresetBar, { findPresetLabel } from './PresetBar';
 import ParamSlider from './ParamSlider';
 import FreqInput from './FreqInput';
 import AudioControls, { DemodMode } from './AudioControls';
 
 export interface ControlPanelHandle {
   goLiveAt: (freq_mhz: number) => void;
+  tuneToFreq: (freq_mhz: number) => void;
 }
 
 const submitBtn = 'w-full py-2.5 rounded-lg font-medium text-sm transition-all';
@@ -52,6 +53,9 @@ export default function ControlPanel() {
   const [volume, setVolume] = useState(50);
   const [demodMode, setDemodMode] = useState<DemodMode>('fm');
   const [biasTee, setBiasTee] = useState(false);
+  const [selectedPresetBand, setSelectedPresetBand] = useState<string | null>(null);
+  const [savedFrequencies, setSavedFrequencies] = useState<SavedFrequency[]>([]);
+  const [savedFreqId, setSavedFreqId] = useState<string>('');
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [inputsOpen, setInputsOpen] = useState(true);
   const lastLiveParams = useRef('');
@@ -88,12 +92,38 @@ export default function ControlPanel() {
     return () => clearTimeout(timer);
   }, [centerMhz, gain, liveActive]);
 
+  useEffect(() => {
+    if (mode !== 'live') return;
+    listSavedFrequencies(300)
+      .then(res => setSavedFrequencies(res.items))
+      .catch(() => setSavedFrequencies([]));
+  }, [mode]);
+
   const bandwidth = stopMhz - startMhz;
   const invalid = mode !== 'live' && stopMhz <= startMhz;
   const isLive = mode === 'live';
   const canRun = isLive || !invalid;
 
-  const handlePreset = (start: number, stop: number) => {
+  const handleStartChange = (value: number) => {
+    setSelectedPresetBand(null);
+    setStartMhz(value);
+  };
+
+  const handleStopChange = (value: number) => {
+    setSelectedPresetBand(null);
+    setStopMhz(value);
+  };
+
+  const handleSavedFrequencySelect = (id: string) => {
+    setSavedFreqId(id);
+    if (!id) return;
+    const item = savedFrequencies.find(f => String(f.id) === id);
+    if (!item) return;
+    setCenterMhz(+item.freq_mhz.toFixed(4));
+  };
+
+  const handlePreset = (start: number, stop: number, label: string) => {
+    setSelectedPresetBand(label);
     if (isLive) {
       setCenterMhz(+((start + stop) / 2).toFixed(3));
     } else {
@@ -109,13 +139,11 @@ export default function ControlPanel() {
         start_mhz: +(center - 1.0).toFixed(1),
         stop_mhz: +(center + 1.0).toFixed(1),
         gain,
-        audio_enabled: true,
+        audio_enabled: false,
         demod_mode: demodMode,
         bias_tee: biasTee,
       });
       handleLiveToggle(true);
-      await toggleAudio({ enabled: true, demod_mode: demodMode });
-      handleAudioToggle(true);
     } catch (e) {
       console.error('Failed to start live:', e);
     } finally {
@@ -129,6 +157,9 @@ export default function ControlPanel() {
       setMode('live');
       setCenterMhz(freq_mhz);
       doStartLive(freq_mhz);
+    },
+    tuneToFreq(freq_mhz: number) {
+      setCenterMhz(freq_mhz);
     },
   }));
 
@@ -154,6 +185,7 @@ export default function ControlPanel() {
         duration,
         gain,
         bias_tee: biasTee,
+        preset_band: findPresetLabel(+startMhz.toFixed(1), +stopMhz.toFixed(1)) ?? selectedPresetBand,
       };
       await startScan(params);
     } catch (e) {
@@ -208,6 +240,21 @@ export default function ControlPanel() {
           <div className="mt-2 space-y-3">
             {isLive ? (
               <>
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Saved Frequencies</label>
+                  <select
+                    value={savedFreqId}
+                    onChange={(e) => handleSavedFrequencySelect(e.target.value)}
+                    className="w-full bg-gray-900/70 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-600"
+                  >
+                    <option value="">Select saved frequency...</option>
+                    {savedFrequencies.map((f) => (
+                      <option key={f.id} value={String(f.id)}>
+                        {f.freq_mhz.toFixed(4)} MHz - {f.description}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <FreqInput label="Center Freq" value={centerMhz} onChange={setCenterMhz} min={24} max={1766} />
                 {liveActive && vfoFreq != null && (
                   <FreqInput
@@ -221,8 +268,8 @@ export default function ControlPanel() {
               </>
             ) : (
               <>
-                <FreqInput label="Start Freq" value={startMhz} onChange={setStartMhz} min={24} max={1766} />
-                <FreqInput label="Stop Freq" value={stopMhz} onChange={setStopMhz} min={24} max={1766} />
+                <FreqInput label="Start Freq" value={startMhz} onChange={handleStartChange} min={24} max={1766} />
+                <FreqInput label="Stop Freq" value={stopMhz} onChange={handleStopChange} min={24} max={1766} />
 
                 <ScanInfo bandwidth={bandwidth} numChunks={numChunks} duration={duration} />
 

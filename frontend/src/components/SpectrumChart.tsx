@@ -2,11 +2,11 @@ import { useRef, useEffect, useState, useCallback } from 'react';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import DualRangeSlider, { SliderMarker } from './DualRangeSlider';
-import { GRID, AXIS, LINE, FILL, MAX_HOLD_COLOR, VFO_COLOR } from './theme';
+import { VFO_COLOR } from './theme';
 import bgPlugin from './plugins/bgPlugin';
 import vfoPlugin from './plugins/vfoPlugin';
 import wheelZoomPlugin from './plugins/wheelZoomPlugin';
-import peakMarkerPlugin, { type PeakMarkerOpts } from './plugins/peakMarkerPlugin';
+import peakMarkerPlugin, { findDips, type PeakMarkerOpts } from './plugins/peakMarkerPlugin';
 import { useSettings } from '../SettingsContext';
 
 export interface ChartView {
@@ -26,6 +26,7 @@ interface Props {
   mode: 'live' | 'scan';
   vfoFreq?: number | null;
   onFreqClick?: (freq_mhz: number) => void;
+  onFreqDoubleClick?: (freq_mhz: number) => void;
   onViewChange?: (view: ChartView) => void;
 }
 
@@ -41,7 +42,7 @@ const XZOOM_H = 24;
 const YZOOM_W = 24;
 
 export default function SpectrumChart({
-  frame, mode, vfoFreq, onFreqClick, onViewChange,
+  frame, mode, vfoFreq, onFreqClick, onFreqDoubleClick, onViewChange,
 }: Props) {
   const { settings } = useSettings();
   const settingsRef = useRef(settings);
@@ -50,6 +51,7 @@ export default function SpectrumChart({
   markerOptsRef.current = {
     minProminenceDb: settings.markerMinProminenceDb,
     minSpacingMhz:   settings.markerMinSpacingMhz,
+    fontSizePx: settings.markerFontSize,
   };
   const markerColorRef = useRef(settings.markerColor);
   markerColorRef.current = settings.markerColor;
@@ -59,12 +61,51 @@ export default function SpectrumChart({
   const maxHoldRef = useRef<number[] | null>(null);
   const onFreqClickRef = useRef(onFreqClick);
   onFreqClickRef.current = onFreqClick;
+  const onFreqDoubleClickRef = useRef(onFreqDoubleClick);
+  onFreqDoubleClickRef.current = onFreqDoubleClick;
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
   const vfoRef = useRef<number | null>(vfoFreq ?? null);
   vfoRef.current = vfoFreq ?? null;
   const frameRef = useRef<SpectrumFrame | null>(null);
   frameRef.current = frame;
+  const snapFreqRef = useRef<(freq_mhz: number) => number>();
+  snapFreqRef.current = (freq_mhz: number) => {
+    const f = frameRef.current?.freqs_mhz;
+    const p = frameRef.current?.power_db;
+    if (!f || f.length === 0) return freq_mhz;
+
+    // Prefer snapping to a detected marker when the click is close.
+    // This makes Save Frequency prefill lock to known channel/notch centers.
+    if (p && p.length === f.length && f.length > 20) {
+      const markers = findDips(f, p, markerOptsRef.current);
+      if (markers.length > 0) {
+        let nearestMarkerFreq = markers[0].freq;
+        let nearestMarkerDist = Math.abs(nearestMarkerFreq - freq_mhz);
+        for (let i = 1; i < markers.length; i++) {
+          const d = Math.abs(markers[i].freq - freq_mhz);
+          if (d < nearestMarkerDist) {
+            nearestMarkerDist = d;
+            nearestMarkerFreq = markers[i].freq;
+          }
+        }
+        const binStep = Math.max(1e-6, (f[f.length - 1] - f[0]) / Math.max(1, f.length - 1));
+        const markerSnapRadiusMhz = Math.max(0.03, 6 * binStep);
+        if (nearestMarkerDist <= markerSnapRadiusMhz) return nearestMarkerFreq;
+      }
+    }
+
+    let lo = 0;
+    let hi = f.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (f[mid] < freq_mhz) lo = mid + 1;
+      else hi = mid - 1;
+    }
+    const i1 = Math.min(f.length - 1, Math.max(0, lo));
+    const i0 = Math.max(0, i1 - 1);
+    return Math.abs(f[i1] - freq_mhz) < Math.abs(f[i0] - freq_mhz) ? f[i1] : f[i0];
+  };
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 400, h: 300 });
   const [yLo, setYLo, yLoRef] = useStateRef(-150);
   const [yHi, setYHi, yHiRef] = useStateRef(0);
@@ -128,8 +169,11 @@ export default function SpectrumChart({
       });
     }
 
-    const axisFont = '10px monospace';
-    const labelFont = '11px sans-serif';
+    const axisFont = `${settingsRef.current.axisTickFontSize}px monospace`;
+    const labelFont = `${settingsRef.current.axisLabelFontSize}px sans-serif`;
+    const xAxisSize = Math.max(30, settingsRef.current.axisTickFontSize + 20);
+    const yAxisSize = Math.max(45, settingsRef.current.axisTickFontSize * 4);
+    const axisLabelSize = Math.max(16, settingsRef.current.axisLabelFontSize + 6);
 
     const opts: uPlot.Options = {
       width: size.w,
@@ -141,27 +185,27 @@ export default function SpectrumChart({
       },
       axes: [
         {
-          stroke: AXIS,
-          grid: { stroke: GRID, width: 1 },
-          ticks: { stroke: GRID, width: 1 },
+          stroke: settingsRef.current.axisColor,
+          grid: { stroke: settingsRef.current.gridColor, width: 1 },
+          ticks: { stroke: settingsRef.current.gridColor, width: 1 },
           gap: 6,
-          size: 30,
+          size: xAxisSize,
           font: axisFont,
           labelFont,
           label: 'Frequency [MHz]',
-          labelSize: 16,
+          labelSize: axisLabelSize,
           labelGap: 2,
         },
         {
-          stroke: AXIS,
-          grid: { stroke: GRID, width: 1 },
-          ticks: { stroke: GRID, width: 1 },
+          stroke: settingsRef.current.axisColor,
+          grid: { stroke: settingsRef.current.gridColor, width: 1 },
+          ticks: { stroke: settingsRef.current.gridColor, width: 1 },
           gap: 6,
-          size: 45,
+          size: yAxisSize,
           font: axisFont,
           labelFont,
           label: 'Power [dB]',
-          labelSize: 16,
+          labelSize: axisLabelSize,
           labelGap: 2,
         },
       ],
@@ -174,7 +218,18 @@ export default function SpectrumChart({
       legend: { show: false },
       plugins: [
         bgPlugin(),
-        vfoPlugin(vfoRef, onFreqClickRef, xStartRef, xEndRef, dataXMinRef, dataXMaxRef, setXStart, setXEnd),
+        vfoPlugin(
+          vfoRef,
+          onFreqClickRef,
+          onFreqDoubleClickRef,
+          snapFreqRef,
+          xStartRef,
+          xEndRef,
+          dataXMinRef,
+          dataXMaxRef,
+          setXStart,
+          setXEnd,
+        ),
         wheelZoomPlugin(xStartRef, xEndRef, dataXMinRef, dataXMaxRef, setXStart, setXEnd),
         peakMarkerPlugin(frameRef, markerOptsRef, markerColorRef),
       ],
@@ -191,7 +246,16 @@ export default function SpectrumChart({
       chartRef.current?.destroy();
       chartRef.current = null;
     };
-  }, [mode]);
+  }, [
+    mode,
+    settings.spectrumLine,
+    settings.spectrumFill,
+    settings.maxHoldColor,
+    settings.gridColor,
+    settings.axisColor,
+    settings.axisTickFontSize,
+    settings.axisLabelFontSize,
+  ]);
 
   // Push data on each frame
   useEffect(() => {

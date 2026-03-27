@@ -8,7 +8,7 @@ interface Preset {
 interface Props {
   activeStart: number;
   activeStop: number;
-  onSelect: (startMhz: number, stopMhz: number) => void;
+  onSelect: (startMhz: number, stopMhz: number, label: string) => void;
 }
 
 interface PresetGroup {
@@ -59,6 +59,14 @@ const presetBtn = 'px-2 py-1 text-xs rounded border transition-all';
 const presetBtnActive = 'border-cyan-500/50 text-cyan-300 bg-cyan-500/10';
 const presetBtnInactive = 'border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300';
 
+export function findPresetLabel(startMhz: number, stopMhz: number): string | null {
+  for (const group of PRESET_GROUPS) {
+    const match = group.presets.find(p => p.startMhz === startMhz && p.stopMhz === stopMhz);
+    if (match) return match.label;
+  }
+  return null;
+}
+
 export default function PresetBar({ activeStart, activeStop, onSelect }: Props) {
   return (
     <div className="space-y-2">
@@ -71,7 +79,7 @@ export default function PresetBar({ activeStart, activeStop, onSelect }: Props) 
             {g.presets.map(p => (
               <button
                 key={p.label}
-                onClick={() => onSelect(p.startMhz, p.stopMhz)}
+                onClick={() => onSelect(p.startMhz, p.stopMhz, p.label)}
                 title={p.antenna ? `🔌 ${p.antenna}` : undefined}
                 className={`${presetBtn} ${activeStart === p.startMhz && activeStop === p.stopMhz ? presetBtnActive : presetBtnInactive}`}
               >
