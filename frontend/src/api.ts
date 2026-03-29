@@ -39,8 +39,18 @@ export interface SavedFrequency {
   created_at: string;
 }
 
+export interface SdrDeviceInfo {
+  type: string;
+  index: number;
+  label: string;
+  serial: string;
+  alias: string;
+}
+
 export async function startScan(params: {
-  start_mhz: number; stop_mhz: number; duration: number; gain: number; bias_tee?: boolean; preset_band?: string | null;
+  start_mhz: number; stop_mhz: number; duration: number; gain: number;
+  bias_tee?: boolean; preset_band?: string | null; device?: string;
+  device_index?: number;
 }): Promise<JobResponse> {
   return (await post('/api/scan', params)).json();
 }
@@ -50,6 +60,7 @@ export async function startScan(params: {
 export async function startLive(params: {
   start_mhz: number; stop_mhz: number; gain: number;
   audio_enabled?: boolean; demod_mode?: string; bias_tee?: boolean;
+  device?: string; device_index?: number;
 }): Promise<{ status: string; start_mhz: number; stop_mhz: number }> {
   return (await post('/api/live/start', params)).json();
 }
@@ -130,4 +141,16 @@ export async function deleteFrequency(freqId: number): Promise<{ status: string 
   const res = await fetch(`${API}/api/frequencies/${freqId}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
+}
+
+// ── Device enumeration ────────────────────────────────
+
+export async function listDevices(): Promise<{ devices: SdrDeviceInfo[] }> {
+  const res = await fetch(`${API}/api/devices`);
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function setDeviceAlias(serial: string, alias: string): Promise<{ status: string }> {
+  return (await post('/api/devices/alias', { serial, alias })).json();
 }

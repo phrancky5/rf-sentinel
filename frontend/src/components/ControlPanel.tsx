@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useImperativeHandle } from 'react';
-import { startScan, startLive, retuneLive, stopLive, listSavedFrequencies, type SavedFrequency } from '../api';
+import { startScan, startLive, retuneLive, stopLive, listSavedFrequencies, listDevices, type SavedFrequency, type SdrDeviceInfo } from '../api';
 import { useApp } from '../AppContext';
 import ModeSelector, { Mode } from './ModeSelector';
 import PresetBar, { findPresetLabel } from './PresetBar';
@@ -18,6 +18,12 @@ const submitBtnLiveActive = 'bg-red-600 hover:bg-red-500 text-white animate-puls
 const submitBtnLive = 'bg-red-600 hover:bg-red-500 text-white';
 const submitBtnScan = 'bg-cyan-600 hover:bg-cyan-500 text-white glow-accent';
 const sectionToggle = 'flex items-center justify-between w-full text-xs text-gray-400 hover:text-gray-200 transition-colors';
+
+type DeviceType = 'rtlsdr' | 'hackrf';
+const DEVICE_LIMITS: Record<DeviceType, { freqMin: number; freqMax: number; gainMax: number }> = {
+  rtlsdr: { freqMin: 24, freqMax: 1766, gainMax: 50 },
+  hackrf: { freqMin: 1, freqMax: 6000, gainMax: 50 },
+};
 
 function ScanInfo({ bandwidth, numChunks, duration }: { bandwidth: number; numChunks: number; duration: number }) {
   const formatEst = () => {
@@ -44,6 +50,10 @@ export default function ControlPanel() {
   } = useApp();
 
   const [mode, setMode] = useState<Mode>('live');
+  const [device, setDevice] = useState<DeviceType>('rtlsdr');
+  const [deviceIndex, setDeviceIndex] = useState(0);
+  const [devices, setDevices] = useState<SdrDeviceInfo[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
   const [startMhz, setStartMhz] = useState(85.0);
   const [stopMhz, setStopMhz] = useState(140.0);
   const [centerMhz, setCenterMhz] = useState(104.2);
@@ -60,6 +70,30 @@ export default function ControlPanel() {
   const [inputsOpen, setInputsOpen] = useState(true);
   const lastLiveParams = useRef('');
   const retuning = useRef(false);
+  const limits = DEVICE_LIMITS[device];
+
+  const refreshDevices = useCallback(async () => {
+    setDevicesLoading(true);
+    try {
+      const res = await listDevices();
+      setDevices(res.devices);
+      // If current selection no longer exists, reset to first device
+      if (res.devices.length > 0) {
+        const match = res.devices.find(d => d.type === device && d.index === deviceIndex);
+        if (!match) {
+          setDevice(res.devices[0].type as DeviceType);
+          setDeviceIndex(res.devices[0].index);
+        }
+      }
+    } catch {
+      setDevices([]);
+    } finally {
+      setDevicesLoading(false);
+    }
+  }, [device, deviceIndex]);
+
+  // Fetch devices on mount
+  useEffect(() => { refreshDevices(); }, []);
 
   useEffect(() => {
     if (!liveActive) {
@@ -142,6 +176,8 @@ export default function ControlPanel() {
         audio_enabled: false,
         demod_mode: demodMode,
         bias_tee: biasTee,
+        device,
+        device_index: deviceIndex,
       });
       handleLiveToggle(true);
     } catch (e) {
@@ -186,6 +222,8 @@ export default function ControlPanel() {
         gain,
         bias_tee: biasTee,
         preset_band: findPresetLabel(+startMhz.toFixed(1), +stopMhz.toFixed(1)) ?? selectedPresetBand,
+        device,
+        device_index: deviceIndex,
       };
       await startScan(params);
     } catch (e) {
@@ -214,6 +252,57 @@ export default function ControlPanel() {
   return (
     <div className="space-y-4">
       <ModeSelector mode={mode} onChange={handleModeChange} />
+
+      <div>
+        <label className="text-[10px] text-gray-400 mb-1 block uppercase tracking-wider">SDR Device</label>
+        {/* Row 1: Type selector + refresh */}
+        <div className="flex gap-1.5">
+          <select
+            value={device}
+            onChange={(e) => {
+              const newType = e.target.value as DeviceType;
+              setDevice(newType);
+              const first = devices.find(d => d.type === newType);
+              setDeviceIndex(first ? first.index : 0);
+            }}
+            disabled={liveActive || loading}
+            className="flex-1 bg-gray-900/70 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-cyan-600 disabled:opacity-50"
+          >
+            {(['rtlsdr', 'hackrf'] as DeviceType[]).map(t => (
+              <option key={t} value={t}>{t === 'rtlsdr' ? 'RTL-SDR' : 'HackRF'}</option>
+            ))}
+          </select>
+          <button
+            onClick={refreshDevices}
+            disabled={liveActive || loading || devicesLoading}
+            className="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Refresh device list"
+          >
+            {devicesLoading ? '...' : '⟳'}
+          </button>
+        </div>
+        {/* Row 2: Device selector */}
+        <div className="flex gap-1.5 mt-1.5">
+          <select
+            value={`${device}:${deviceIndex}`}
+            onChange={(e) => {
+              const [, idx] = e.target.value.split(':');
+              setDeviceIndex(Number(idx));
+            }}
+            disabled={liveActive || loading}
+            className="flex-1 bg-gray-900/70 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-cyan-600 disabled:opacity-50 truncate"
+          >
+            {devices.filter(d => d.type === device).length === 0 && (
+              <option value={`${device}:${deviceIndex}`}>No {device === 'rtlsdr' ? 'RTL-SDR' : 'HackRF'} found</option>
+            )}
+            {devices.filter(d => d.type === device).map((d) => (
+              <option key={`${d.type}:${d.index}`} value={`${d.type}:${d.index}`}>
+                {d.alias || d.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
 
       <div>
         <button onClick={() => setPresetsOpen(o => !o)} className={sectionToggle}>
@@ -255,7 +344,7 @@ export default function ControlPanel() {
                     ))}
                   </select>
                 </div>
-                <FreqInput label="Center Freq" value={centerMhz} onChange={setCenterMhz} min={24} max={1766} />
+                <FreqInput label="Center Freq" value={centerMhz} onChange={setCenterMhz} min={limits.freqMin} max={limits.freqMax} />
                 {liveActive && vfoFreq != null && (
                   <FreqInput
                     label="VFO Freq"
@@ -268,8 +357,8 @@ export default function ControlPanel() {
               </>
             ) : (
               <>
-                <FreqInput label="Start Freq" value={startMhz} onChange={handleStartChange} min={24} max={1766} />
-                <FreqInput label="Stop Freq" value={stopMhz} onChange={handleStopChange} min={24} max={1766} />
+                <FreqInput label="Start Freq" value={startMhz} onChange={handleStartChange} min={limits.freqMin} max={limits.freqMax} />
+                <FreqInput label="Stop Freq" value={stopMhz} onChange={handleStopChange} min={limits.freqMin} max={limits.freqMax} />
 
                 <ScanInfo bandwidth={bandwidth} numChunks={numChunks} duration={duration} />
 
@@ -285,7 +374,7 @@ export default function ControlPanel() {
             )}
 
             <ParamSlider label="Gain" value={gain} onChange={setGain}
-              min={0} max={50} step={1} unit="dB" />
+              min={0} max={limits.gainMax} step={1} unit="dB" />
 
             <div className="flex items-center justify-between pt-0.5">
               <span className="text-xs text-gray-400">Bias-T (LNA power)</span>

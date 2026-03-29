@@ -52,6 +52,8 @@ class LiveSession:
         self._demod_state = None
         self._vfo_freq_hz: Optional[float] = None
         self._bias_tee: bool = False
+        self._device_type: str = "rtlsdr"
+        self._device_index: int = 0
         self._psd_smoother = None
         self._spectrum_queue: queue.Queue | None = None
         self._spectrum_thread: threading.Thread | None = None
@@ -85,7 +87,8 @@ class LiveSession:
 
     def start(self, start_mhz: float, stop_mhz: float, gain: float,
               audio_enabled: bool = False, demod_mode: DemodMode = DemodMode.FM,
-              bias_tee: bool = False) -> None:
+              bias_tee: bool = False, device: str = "rtlsdr",
+              device_index: int = 0) -> None:
         if self._active:
             self.stop()
         center_hz, sample_rate, start_mhz, stop_mhz = self._compute_params(start_mhz, stop_mhz)
@@ -93,6 +96,8 @@ class LiveSession:
         self._demod_mode = demod_mode
         self._vfo_freq_hz = None
         self._bias_tee = bias_tee
+        self._device_type = device
+        self._device_index = device_index
         self._reset_dsp_state()
         self._active = True
         self._thread = threading.Thread(
@@ -126,7 +131,8 @@ class LiveSession:
             audio = self._audio_enabled
             demod = self._demod_mode
             self.stop()
-            self.start(start_mhz, stop_mhz, gain, audio, demod, self._bias_tee)
+            self.start(start_mhz, stop_mhz, gain, audio, demod, self._bias_tee,
+                       self._device_type, self._device_index)
             return
         try:
             self._sdr.retune(center_hz, gain)
@@ -224,11 +230,11 @@ class LiveSession:
 
     def _loop(self, center_hz: float, sample_rate: float,
               gain: float, start_mhz: float, stop_mhz: float) -> None:
-        from core.sdr import SDRDevice, CaptureConfig, CaptureResult
+        from core.sdr import create_device, CaptureConfig, CaptureResult
 
         frame_count = 0
         try:
-            with SDRDevice() as sdr:
+            with create_device(self._device_type, self._device_index) as sdr:
                 self._sdr = sdr
                 self._config = CaptureConfig(
                     center_freq=center_hz, sample_rate=sample_rate,

@@ -13,6 +13,7 @@ from core.api.runner import JobRunner
 from core.api.db import (
     list_scans, get_scan, delete_scan as db_delete, get_settings, save_settings,
     update_scan_note, list_saved_frequencies, save_frequency, delete_saved_frequency,
+    get_device_aliases, set_device_alias, delete_device_alias,
 )
 
 
@@ -23,18 +24,42 @@ def create_routes(runner: JobRunner) -> APIRouter:
     async def get_status():
         return {"status": "online"}
 
+    @router.get("/api/devices")
+    async def list_devices():
+        from core.sdr import enumerate_devices
+        devices = enumerate_devices()
+        aliases = get_device_aliases()
+        for d in devices:
+            d["alias"] = aliases.get(d["serial"], "")
+        return {"devices": devices}
+
+    @router.post("/api/devices/alias")
+    async def upsert_device_alias(payload: dict):
+        serial = payload.get("serial", "").strip()
+        alias = payload.get("alias", "").strip()
+        if not serial:
+            return JSONResponse({"error": "serial is required"}, status_code=400)
+        if not alias:
+            delete_device_alias(serial)
+            return {"status": "deleted", "serial": serial}
+        if len(alias) > 100:
+            return JSONResponse({"error": "alias too long (max 100 chars)"}, status_code=400)
+        set_device_alias(serial, alias)
+        return {"status": "saved", "serial": serial, "alias": alias}
+
     @router.post("/api/scan")
     async def start_scan(req: ScanRequest):
         job = runner.submit_scan(
             req.start_mhz, req.stop_mhz, req.duration, req.gain,
-            req.bias_tee, req.preset_band,
+            req.bias_tee, req.preset_band, req.device, req.device_index,
         )
         return {"job_id": job.id, "status": job.status.value}
 
     @router.post("/api/live/start")
     async def start_live(req: LiveRequest):
         runner.live.start(req.start_mhz, req.stop_mhz, req.gain,
-                          req.audio_enabled, req.demod_mode, req.bias_tee)
+                          req.audio_enabled, req.demod_mode, req.bias_tee,
+                          req.device, req.device_index)
         return {"status": "started", "start_mhz": req.start_mhz, "stop_mhz": req.stop_mhz,
                 "audio_enabled": req.audio_enabled, "demod_mode": req.demod_mode}
 

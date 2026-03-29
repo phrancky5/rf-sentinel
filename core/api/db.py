@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS saved_frequencies (
     created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_saved_frequencies_created_at ON saved_frequencies(created_at DESC);
+CREATE TABLE IF NOT EXISTS device_aliases (
+    serial TEXT PRIMARY KEY,
+    alias  TEXT NOT NULL
+);
 """
 
 
@@ -235,6 +239,38 @@ def delete_saved_frequency(freq_id: int) -> bool:
         return False
     with _lock:
         cur = _conn.execute("DELETE FROM saved_frequencies WHERE id = ?", (freq_id,))
+        _conn.commit()
+    return cur.rowcount > 0
+
+
+# ── Device aliases ──────────────────────────────────────────────────────
+
+def get_device_aliases() -> dict[str, str]:
+    """Return ``{serial: alias}`` for all named devices."""
+    if not _conn:
+        return {}
+    rows = _conn.execute("SELECT serial, alias FROM device_aliases").fetchall()
+    return {r["serial"]: r["alias"] for r in rows}
+
+
+def set_device_alias(serial: str, alias: str) -> None:
+    """Create or update the friendly name for a device identified by *serial*."""
+    if not _conn:
+        return
+    with _lock:
+        _conn.execute(
+            "INSERT OR REPLACE INTO device_aliases (serial, alias) VALUES (?, ?)",
+            (serial, alias),
+        )
+        _conn.commit()
+
+
+def delete_device_alias(serial: str) -> bool:
+    """Remove a device alias.  Returns True if a row was deleted."""
+    if not _conn:
+        return False
+    with _lock:
+        cur = _conn.execute("DELETE FROM device_aliases WHERE serial = ?", (serial,))
         _conn.commit()
     return cur.rowcount > 0
 

@@ -84,11 +84,14 @@ class JobRunner:
 
     def submit_scan(self, start_mhz: float, stop_mhz: float,
                     duration: float, gain: float, bias_tee: bool = False,
-                    preset_band: str | None = None) -> Job:
+                    preset_band: str | None = None,
+                    device: str = "rtlsdr",
+                    device_index: int = 0) -> Job:
         return self._submit_job("scan", {
             "start_mhz": start_mhz, "stop_mhz": stop_mhz,
             "duration": duration, "gain": gain, "bias_tee": bias_tee,
             "preset_band": preset_band, "note": "",
+            "device": device, "device_index": device_index,
         }, self._run_scan)
 
     # ── Shared helpers ──────────────────────────────────
@@ -96,7 +99,7 @@ class JobRunner:
     def _capture_segments(self, job: Job, label: str, compute_fn, trim_fn):
         """Capture I/Q across planned chunks, returning processed segments."""
         from core.dsp import plan_chunks, SAMPLE_RATE
-        from core.sdr import SDRDevice, CaptureConfig
+        from core.sdr import create_device, CaptureConfig
 
         p = job.params
         centers = plan_chunks(p["start_mhz"] * 1e6, p["stop_mhz"] * 1e6)
@@ -106,7 +109,9 @@ class JobRunner:
               f"({num_chunks} chunk{'s' if num_chunks > 1 else ''})")
 
         segments = []
-        with SDRDevice() as sdr:
+        device_type = p.get("device", "rtlsdr")
+        device_index = p.get("device_index", 0)
+        with create_device(device_type, device_index) as sdr:
             self._current_sdr = sdr
             try:
                 for i, fc in enumerate(centers):

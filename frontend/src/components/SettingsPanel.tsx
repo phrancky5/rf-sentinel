@@ -1,8 +1,9 @@
 /**
  * SettingsPanel — slide-in drawer for editing UI/chart settings.
  */
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSettings, type AppSettings } from '../SettingsContext';
+import { listDevices, setDeviceAlias, type SdrDeviceInfo } from '../api';
 
 // ── Small reusable controls ────────────────────────────────────────────────
 
@@ -75,7 +76,26 @@ const COLOR_FIELDS: { key: ColorKey; label: string }[] = [
 
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const { settings, update, reset, saving } = useSettings();
-  const [section, setSection] = useState<'colors' | 'markers' | 'fonts'>('colors');
+  const [section, setSection] = useState<'colors' | 'markers' | 'fonts' | 'devices'>('colors');
+
+  // ── Device alias state ──
+  const [devices, setDevices] = useState<SdrDeviceInfo[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [editAliases, setEditAliases] = useState<Record<string, string>>({});
+
+  const refreshDevices = useCallback(async () => {
+    setDevicesLoading(true);
+    try {
+      const res = await listDevices();
+      setDevices(res.devices);
+      const aliases: Record<string, string> = {};
+      for (const d of res.devices) aliases[d.serial] = d.alias || '';
+      setEditAliases(aliases);
+    } catch { setDevices([]); }
+    finally { setDevicesLoading(false); }
+  }, []);
+
+  useEffect(() => { if (section === 'devices') refreshDevices(); }, [section]);
 
   const tab = (s: typeof section, label: string) => (
     <button
@@ -119,6 +139,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
           {tab('colors',  'Colors')}
           {tab('markers', 'Markers')}
           {tab('fonts',   'Display')}
+          {tab('devices', 'Devices')}
         </div>
 
         {/* Content */}
@@ -158,6 +179,52 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                   />
                 </Row>
               </div>
+            </div>
+          )}
+
+          {section === 'devices' && (
+            <div>
+              <p className="text-[10px] text-gray-600 mb-2 uppercase tracking-wider">Device names</p>
+              {devicesLoading ? (
+                <p className="text-xs text-gray-500 animate-pulse">Scanning devices…</p>
+              ) : devices.length === 0 ? (
+                <p className="text-xs text-gray-500">No SDR devices detected.</p>
+              ) : (
+                <div className="space-y-3">
+                  {devices.map(d => (
+                    <div key={d.serial} className="border border-gray-800 rounded-lg p-2.5 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-300 font-medium">{d.type === 'rtlsdr' ? 'RTL-SDR' : 'HackRF'} #{d.index}</span>
+                      </div>
+                      <div className="text-[10px] text-gray-500 font-mono break-all">{d.serial}</div>
+                      <div className="text-[10px] text-gray-500">{d.label}</div>
+                      <input
+                        type="text"
+                        value={editAliases[d.serial] ?? ''}
+                        onChange={e => setEditAliases(prev => ({ ...prev, [d.serial]: e.target.value }))}
+                        placeholder="Custom name"
+                        maxLength={100}
+                        className="w-full bg-gray-900/70 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-yellow-600 placeholder:text-gray-600"
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            setDeviceAlias(d.serial, (editAliases[d.serial] ?? '').trim())
+                              .then(() => refreshDevices()).catch(() => {});
+                          }
+                        }}
+                      />
+                      <button
+                        onClick={() => {
+                          setDeviceAlias(d.serial, (editAliases[d.serial] ?? '').trim())
+                            .then(() => refreshDevices()).catch(() => {});
+                        }}
+                        className="px-2 py-0.5 bg-yellow-600/20 border border-yellow-600/50 rounded text-[10px] text-yellow-300 hover:bg-yellow-600/30 transition-colors"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

@@ -1,14 +1,20 @@
-"""SDR device interface — capture I/Q samples from RTL-SDR."""
+"""SDR device interface — capture I/Q samples from supported SDR hardware.
+
+Supported devices:
+  - rtlsdr  — RTL-SDR (pyrtlsdr)
+  - hackrf  — HackRF One (pyhackrf2)
+
+Use ``create_device(driver)`` or the backward-compatible ``SDRDevice(driver)``
+factory to obtain a device instance.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, Optional
-
 import logging
+from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
-from rtlsdr import RtlSdr
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +27,7 @@ class CaptureConfig:
     sample_rate: float = 1.024e6  # Hz
     gain: float = 30.0  # dB
     duration: float = 5.0  # seconds
-    bias_tee: bool = False  # Enable 4.5 V bias-T to power active antennas
+    bias_tee: bool = False  # Enable bias-T to power active antennas
     max_samples: int = 128 * 1024 * 1024  # ~1 GB limit (128M complex64 samples)
 
 
@@ -35,160 +41,81 @@ class CaptureResult:
     num_samples: int
 
 
-class SDRDevice:
-    """Wrapper around RTL-SDR with resource management."""
+def create_device(device_type: str = "rtlsdr", device_index: int = 0):
+    """Factory — create an SDR device instance by driver name.
 
-    def __init__(self) -> None:
-        self._sdr: Optional[RtlSdr] = None
-        self._last_config_key: Optional[tuple] = None
+    Args:
+        device_type: ``"rtlsdr"`` (default) or ``"hackrf"``.
+        device_index: Zero-based index when multiple devices of the same
+            type are connected.
 
-    def open(self) -> None:
-        if self._sdr is None:
-            self._sdr = RtlSdr()
-            self._last_config_key = None
+    Returns:
+        A device object with open/close/capture/start_stream/retune/stop_stream
+        methods + context-manager support.
+    """
+    if device_type == "hackrf":
+        from core.sdr.hackrf_device import HackRFDevice
+        return HackRFDevice(device_index=device_index)
+    from core.sdr.rtlsdr_device import RtlSdrDevice
+    return RtlSdrDevice(device_index=device_index)
 
-    def close(self) -> None:
-        if self._sdr is not None:
-            self._sdr.close()
-            self._sdr = None
-            self._last_config_key = None
 
-    def __enter__(self) -> "SDRDevice":
-        self.open()
-        return self
+def enumerate_devices() -> list[dict]:
+    """Return a list of all attached SDR devices.
 
-    def __exit__(self, *args) -> None:
-        self.close()
+    Each entry: ``{"type": str, "index": int, "label": str, "serial": str}``.
+    The ``index`` is the per-driver device index (pass to ``create_device``).
+    """
+    devices: list[dict] = []
 
-    def _config_key(self, config: CaptureConfig) -> tuple:
-        return (config.sample_rate, config.center_freq, config.gain, config.bias_tee)
+    # ── RTL-SDR ──
+    try:
+        import ctypes
+        from rtlsdr import librtlsdr
 
-    def _apply_config(self, config: CaptureConfig) -> None:
-        """Apply device settings + PLL settle if config changed. No-op otherwise."""
-        if self._sdr is None:
-            raise RuntimeError("Device not open. Use 'with SDRDevice() as sdr:'")
-
-        config_key = self._config_key(config)
-        if config_key == self._last_config_key:
-            return
-
-        try:
-            self._sdr.sample_rate = config.sample_rate
-            self._sdr.center_freq = config.center_freq
-            self._sdr.gain = config.gain
-            self._sdr.set_bias_tee(config.bias_tee)
-        except Exception as exc:
-            self._last_config_key = None
-            raise RuntimeError(
-                f"I2C write failed during config (freq={config.center_freq/1e6:.1f} MHz, "
-                f"gain={config.gain:.0f} dB). Device may need a replug."
-            ) from exc
-
-        try:
-            self._sdr.read_samples(256 * 1024)
-        except Exception as exc:
-            self._last_config_key = None
-            raise RuntimeError(
-                f"USB read failed on settle chunk (freq={config.center_freq/1e6:.1f} MHz, "
-                f"rate={config.sample_rate/1e6:.1f} MHz). "
-                "Device may need a replug."
-            ) from exc
-        self._last_config_key = config_key
-
-    def capture(self, config: CaptureConfig) -> CaptureResult:
-        """Capture I/Q samples based on config.
-
-        Skips reconfiguration and PLL settling when config unchanged.
-        """
-        self._apply_config(config)
-
-        num_samples = int(config.sample_rate * config.duration)
-        if num_samples > config.max_samples:
-            num_samples = config.max_samples
-
-        actual_duration = num_samples / config.sample_rate
-
-        # Read in chunks to avoid memory spikes
-        chunk_size = 256 * 1024
-        chunks: list[np.ndarray] = []
-        remaining = num_samples
-
-        while remaining > 0:
-            n = min(chunk_size, remaining)
+        n = librtlsdr.rtlsdr_get_device_count()
+        for i in range(n):
+            name_raw = librtlsdr.rtlsdr_get_device_name(i)
+            name = name_raw.decode() if isinstance(name_raw, bytes) else str(name_raw)
+            serial = ""
             try:
-                chunks.append(self._sdr.read_samples(n))
-            except Exception as exc:
-                log.error(
-                    "USB read failed on chunk %d/%d (got %d/%d samples). "
-                    "Device may need a replug.",
-                    len(chunks) + 1,
-                    -(-num_samples // chunk_size),
-                    sum(len(c) for c in chunks),
-                    num_samples,
-                )
-                raise
-            remaining -= n
+                manuf = (ctypes.c_ubyte * 256)()
+                product = (ctypes.c_ubyte * 256)()
+                ser_buf = (ctypes.c_ubyte * 256)()
+                librtlsdr.rtlsdr_get_device_usb_strings(i, manuf, product, ser_buf)
+                serial = bytes(ser_buf).split(b"\x00")[0].decode(errors="replace")
+            except Exception:
+                pass
+            label = f"{name} #{i}" if n > 1 else name
+            if serial:
+                label += f" [{serial[-8:]}]"
+            devices.append({
+                "type": "rtlsdr", "index": i,
+                "label": label, "serial": serial,
+            })
+    except Exception as exc:
+        log.debug("RTL-SDR enumeration failed: %s", exc)
 
-        samples = np.concatenate(chunks)
+    # ── HackRF ──
+    try:
+        from core.sdr.hackrf_device import _ensure_hackrf_libs
+        _ensure_hackrf_libs()
+        from pyhackrf2 import HackRF
 
-        return CaptureResult(
-            samples=samples,
-            config=config,
-            actual_duration=actual_duration,
-            num_samples=len(samples),
-        )
+        serials = HackRF.enumerate()
+        for i, ser in enumerate(serials):
+            label = f"HackRF One #{i}" if len(serials) > 1 else "HackRF One"
+            if ser:
+                label += f" [{ser[-8:]}]"
+            devices.append({
+                "type": "hackrf", "index": i,
+                "label": label, "serial": ser,
+            })
+    except Exception as exc:
+        log.debug("HackRF enumeration failed: %s", exc)
 
-    def quick_capture(
-        self, freq_mhz: float, duration: float = 5.0, **kwargs
-    ) -> CaptureResult:
-        """Convenience method — capture by frequency in MHz."""
-        config = CaptureConfig(center_freq=freq_mhz * 1e6, duration=duration, **kwargs)
-        return self.capture(config)
+    return devices
 
-    # ── Continuous streaming (live mode) ─────────────────
 
-    def configure(self, config: CaptureConfig) -> None:
-        """Apply device settings with PLL settle, without reading data.
-
-        Used before start_stream() to set up the device.
-        """
-        self._apply_config(config)
-
-    def start_stream(self, callback: Callable[[np.ndarray], None],
-                     num_samples: int) -> None:
-        """Start continuous async reading. Blocks until stop_stream().
-
-        callback(samples) fires for each chunk of I/Q samples with no gaps
-        between chunks (USB bulk transfers are continuously pipelined).
-        Call stop_stream() from another thread to unblock.
-        """
-        if self._sdr is None:
-            raise RuntimeError("Device not open. Use 'with SDRDevice() as sdr:'")
-        self._sdr.read_samples_async(lambda iq, ctx: callback(iq), num_samples)
-
-    def retune(self, center_freq: float, gain: float) -> None:
-        """Change center freq and gain while streaming. Thread-safe.
-
-        Uses USB control transfers (I2C) which don't conflict with the
-        bulk sample transfers running in read_samples_async.
-        Raises RuntimeError on I2C failure (device may need replug).
-        """
-        if self._sdr is None:
-            raise RuntimeError("Device not open")
-        try:
-            self._sdr.center_freq = center_freq
-            self._sdr.gain = gain
-        except Exception as exc:
-            log.error("retune: I2C failed at %.1f MHz: %s", center_freq / 1e6, exc)
-            self._last_config_key = None
-            raise RuntimeError(
-                f"I2C write failed during retune (freq={center_freq/1e6:.1f} MHz, "
-                f"gain={gain:.0f} dB). Device may need a replug."
-            ) from exc
-        if self._last_config_key:
-            self._last_config_key = (self._last_config_key[0], center_freq, gain)
-
-    def stop_stream(self) -> None:
-        """Cancel async reading, unblocking start_stream(). Thread-safe."""
-        if self._sdr is not None:
-            self._sdr.cancel_read_async()
+# Backward compat — SDRDevice() still returns an RTL-SDR device by default.
+SDRDevice = create_device

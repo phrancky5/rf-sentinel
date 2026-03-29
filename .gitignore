@@ -56,3 +56,6 @@ core/ml/*.zip
 *.md
 !requirements.txt
 !README.md
+!CHANGELOG.md
+!core/sdr/libs/README.md
+!README.md
